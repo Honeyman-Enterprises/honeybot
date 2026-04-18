@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Block commits that contain obvious secret patterns.
+#
+# Install once per clone:
+#   ./scripts/install-hooks.sh
+# (which runs `git config core.hooksPath .githooks`)
+#
+# This hook also fires inside the honeybot-dev skill's commit flow — when the
+# bot tries to commit its own PR, this is what stops it from shipping a
+# leaked token. open-pr.sh deliberately does NOT pass --no-verify.
+
+set -euo pipefail
+
+# Each entry is an ERE regex matched against added lines in the staged diff.
+# Keep these *tight* — false positives here block real work. Prefer being
+# stricter than grep-happy; the 1Password vault is the only place these
+# should live.
+PATTERNS=(
+  'ops_[A-Za-z0-9_-]{20,}'                     # 1Password service account token
+  'sk-ant-[A-Za-z0-9_-]{20,}'                  # Anthropic API key
+  'xoxb-[0-9]+-[0-9]+-[A-Za-z0-9]+'            # Slack bot token
+  'xoxp-[0-9]+-[0-9]+-[0-9]+-[A-Za-z0-9]+'     # Slack user token
+  'xapp-[0-9]+-[A-Z0-9]+-[0-9]+-'              # Slack app-level token
+  'pat-[a-z0-9-]{8,}-[a-f0-9]{8,}'             # HubSpot personal access key (rough)
+  'ghp_[A-Za-z0-9]{36,}'                       # GitHub classic PAT
+  'github_pat_[A-Za-z0-9_]{40,}'               # GitHub fine-scoped PAT
+  'gho_[A-Za-z0-9]{36,}'                       # GitHub OAuth token
+  'ghs_[A-Za-z0-9]{36,}'                       # GitHub App installation token
+  'AKIA[0-9A-Z]{16}'                           # AWS access key id
+  'ASIA[0-9A-Z]{16}'                           # AWS temporary (STS) key id
+  '-----BEGIN [A-Z ]*PRIVATE KEY-----'         # any PEM private key
+)
+
+fail=0
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+
+if [[ -z "$staged" ]]; then
+  exit 0
+fi
+
+# We scan only added lines (lines starting with + in unified diff). That
+# avoids flagging secrets already present in history that you're merely
+# moving around — the goal is to block *new* leaks.
+diff_added="$(git diff --cached -U0 | grep -E '^\+' | grep -vE '^\+\+\+' || true)"
+
+for pattern in "${PATTERNS[@]}"; do
+  if echo "$diff_added" | grep -E "$pattern" >/dev/null 2>&1; then
+    echo "❌ pre-commit: blocked — staged diff matches secret pattern: $pattern" >&2
+    fail=1
+  fi
+done
+
+# If varlock is installed locally, run its scan too for belt-and-suspenders.
+if command -v varlock >/dev/null 2>&1; then
+  if ! varlock scan --staged >/dev/null 2>&1; then
+    echo "❌ pre-commit: varlock scan reported leaks." >&2
+    fail=1
+  fi
+fi
+
+if [[ $fail -eq 1 ]]; then
+  echo "" >&2
+  echo "Put secrets in 1Password (vault: Honeybot) and reference them via" >&2
+  echo ".env.schema or skills/_lib/creds.sh — never commit the raw value." >&2
+  exit 1
+fi
+
+exit 0

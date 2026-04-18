@@ -1,0 +1,32 @@
+# Production overlay — use on EC2.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Differences vs base compose:
+#   - Secret env_file is read from /etc/honeybot/op.env (root-provisioned,
+#     chmod 600) instead of ./op.env in the repo directory.
+#   - restart: always (survive host reboots).
+#   - Watchtower stays enabled; that's the whole point on prod.
+#
+# The image itself comes from ghcr.io via the base compose. To pin to a
+# specific digest instead of :latest (e.g. for rollback), export
+# HONEYBOT_IMAGE=ghcr.io/honeyman-enterprises/honeybot@sha256:... before
+# bringing the stack up, and Watchtower will stop auto-updating that tag.
+
+services:
+  hermes:
+    env_file:
+      - /etc/honeybot/op.env
+    restart: always
+
+  watchtower:
+    restart: always
+    environment:
+      # On prod we want updates to flow automatically. Override the poll
+      # interval from the host via HONEYBOT_WATCHTOWER_INTERVAL if needed
+      # (base compose defaults to 300s).
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_ROLLING_RESTART: "true"
+      WATCHTOWER_NO_STARTUP_MESSAGE: "true"
+      WATCHTOWER_POLL_INTERVAL: ${HONEYBOT_WATCHTOWER_INTERVAL:-300}

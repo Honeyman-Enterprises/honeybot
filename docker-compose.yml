@@ -1,0 +1,118 @@
+# Honeybot — base compose file.
+#
+# The ONLY secret this reads from disk is OP_SERVICE_ACCOUNT_TOKEN, via
+# env_file. Everything else is resolved from 1Password at container start.
+#
+# By default this PULLS the image from GitHub Container Registry. To build
+# from the local Dockerfile instead (local dev loop), overlay the dev file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# Registry-based auto-deploys:
+#   Watchtower polls ghcr.io every HONEYBOT_WATCHTOWER_INTERVAL seconds. When
+#   a new digest appears on :latest, it pulls, recreates the hermes container
+#   with the same volumes/env, and prunes the old image. The bot's self-PR
+#   flow never triggers this directly — a human merges the PR, CI publishes
+#   a new image, Watchtower picks it up. Three separate gates.
+#
+# Local dev setup:
+#   1. Put `OP_SERVICE_ACCOUNT_TOKEN=ops_...` in ./op.env (gitignored).
+#   2. `docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build`
+#
+# EC2 prod setup:
+#   1. /etc/honeybot/op.env holds the prod service account token (chmod 600).
+#   2. `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d`
+
+services:
+  hermes:
+    # Default to the published image. Override HONEYBOT_IMAGE locally to
+    # point at a sha-pinned tag during a rollback, or the dev overlay will
+    # replace this with `build:` instead.
+    image: ${HONEYBOT_IMAGE:-ghcr.io/honeyman-enterprises/honeybot:latest}
+    container_name: honeybot-hermes
+    restart: unless-stopped
+    pull_policy: always
+
+    env_file:
+      # Contains ONLY OP_SERVICE_ACCOUNT_TOKEN=ops_... (plus any non-secret
+      # overrides like HONEYBOT_SLACK_USER for local testing).
+      - ./op.env
+
+    environment:
+      # Needed by the honeybot-dev skill to know which repo to clone/PR.
+      HONEYBOT_REPO_SLUG: ${HONEYBOT_REPO_SLUG:-Honeyman-Enterprises/honeybot}
+      HONEYBOT_DEV_BASE_BRANCH: ${HONEYBOT_DEV_BASE_BRANCH:-main}
+      # Commit identity for bot-authored PRs (see skills/honeybot-dev/SKILL.md).
+      HONEYBOT_COMMIT_NAME:  ${HONEYBOT_COMMIT_NAME:-Honeybot}
+      HONEYBOT_COMMIT_EMAIL: ${HONEYBOT_COMMIT_EMAIL:-honeybot@noreply.honeymanenterprises.com}
+
+    volumes:
+      # Hermes memory / FTS / skill state. Must persist across restarts.
+      - hermes-data:/home/honeybot/.hermes/data
+      # Self-edit workspace (clone of this repo). The honeybot-dev skill
+      # lives here. Persists so a branch survives a container restart.
+      - hermes-workspace:/home/honeybot/workspace
+
+    # No `ports:` — Slack Socket Mode is outbound-only. Nothing listens.
+
+    # Resource ceiling for t4g.small (2 GB RAM). Hermes idle is small; leave
+    # headroom for skill subprocesses (npm install of HubSpot CLI, etc.).
+    mem_limit: 1536m
+    memswap_limit: 1536m
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    labels:
+      # Watchtower only touches containers that opt in. Everything else on
+      # the host is ignored. (WATCHTOWER_LABEL_ENABLE=true below enforces it.)
+      com.centurylinklabs.watchtower.enable: "true"
+
+    networks: [honeynet]
+
+  watchtower:
+    # Polls ghcr.io for new image digests and redeploys hermes when the tag
+    # it's tracking (:latest by default) points at a new digest.
+    image: containrrr/watchtower:1.7.1
+    container_name: honeybot-watchtower
+    restart: unless-stopped
+
+    environment:
+      # Only act on containers that have the enable label set.
+      WATCHTOWER_LABEL_ENABLE: "true"
+      # Remove old images after a successful restart.
+      WATCHTOWER_CLEANUP: "true"
+      # Default 5 minutes; override via .env / host env.
+      WATCHTOWER_POLL_INTERVAL: ${HONEYBOT_WATCHTOWER_INTERVAL:-300}
+      # Don't spam logs with "no updates" messages.
+      WATCHTOWER_NO_STARTUP_MESSAGE: "true"
+      # Rolling restart: stop old, start new (fine for single-instance bot).
+      WATCHTOWER_ROLLING_RESTART: "true"
+
+    volumes:
+      # Watchtower needs the Docker socket to inspect + recreate containers.
+      # This is privileged access — scope is limited by WATCHTOWER_LABEL_ENABLE.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Registry auth: Watchtower reads this to pull from ghcr.io. On EC2
+      # the host runs `docker login ghcr.io` once during bootstrap so the
+      # config ends up at /root/.docker/config.json.
+      - ${HONEYBOT_DOCKER_CONFIG:-/root/.docker/config.json}:/config.json:ro
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+    networks: [honeynet]
+
+volumes:
+  hermes-data:
+  hermes-workspace:
+
+networks:
+  honeynet:
+    driver: bridge

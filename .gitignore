@@ -1,0 +1,31 @@
+# Secrets — NEVER commit
+.env
+.env.local
+.env.*.local
+*.env.resolved
+secrets/
+op.env
+*.op.env
+
+# Hermes runtime data (memory, FTS, skill state)
+.hermes/
+hermes-data/
+
+# Docker / build artifacts
+*.log
+docker-compose.override.yml
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node (from HubSpot CLI, if anything leaks into host)
+node_modules/

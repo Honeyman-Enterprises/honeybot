@@ -1,0 +1,97 @@
+# Build and publish the Honeybot container image to GitHub Container Registry.
+#
+# Triggers on merges to main (or manual dispatch). Produces a multi-arch
+# manifest (linux/amd64 + linux/arm64 — the EC2 t4g.small is Graviton/arm64,
+# local dev Macs are arm64, CI runners are amd64, so we cover all three).
+#
+# Watchtower on the EC2 host polls ghcr.io for a new digest on :latest and
+# restarts the container. That's the full "auto-redeploy" loop; nothing here
+# SSHes into anything.
+#
+# The bot-opened PRs do NOT run this workflow — it only fires on main. A
+# human reviewer merges the PR first. That's the gate.
+
+name: publish-image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write     # required to push to ghcr.io/<owner>/...
+  id-token: write     # enables signed provenance attestations (SLSA)
+
+concurrency:
+  group: publish-image-${{ github.ref }}
+  cancel-in-progress: false   # never cancel a publish mid-flight
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU (arm64 emulation for amd64 runner)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image metadata (tags + labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # lowercase owner for ghcr compatibility
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-,format=short
+            type=raw,value={{date 'YYYYMMDD-HHmmss'}}
+          labels: |
+            org.opencontainers.image.title=honeybot
+            org.opencontainers.image.description=Slack-fronted Hermes agent (self-hosted)
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.licenses=UNLICENSED
+
+      - name: Build and push multi-arch image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: true
+          sbom: true
+          # Build cache lives in ghcr alongside the image.
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
+          cache-to:   type=registry,ref=ghcr.io/${{ github.repository }}:buildcache,mode=max
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Summarise
+        run: |
+          echo "Published digest: ${{ steps.build.outputs.digest }}"
+          echo "Tags:"
+          echo "${{ steps.meta.outputs.tags }}"

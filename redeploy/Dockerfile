@@ -10,7 +10,7 @@
 # works. If the repo ever goes private, wire `skills/_lib/gh-app-token.sh`
 # into watch.sh and set `git config credential.helper` accordingly.
 
-FROM docker:27-cli-alpine3.20
+FROM docker:27-cli
 
 # git + bash for watch.sh; curl to pull the compose plugin
 RUN apk add --no-cache bash git curl ca-certificates

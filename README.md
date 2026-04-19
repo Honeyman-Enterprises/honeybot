@@ -33,8 +33,9 @@ eval $(op signin)                # sign in as your human user
 
 Then in the 1Password web UI:
 
-1. Fill in real values for `Anthropic API / api_key` and the `Slack Bot`
-   fields (`bot_token`, `app_token`, `signing_secret`, `allowed_user_ids`).
+1. Fill in real values for `Anthropic API / api_key`, `Mem0 / key` (get one
+   at <https://app.mem0.ai>), and the `Slack Bot` fields (`bot_token`,
+   `app_token`, `signing_secret`, `allowed_user_ids`).
 2. **Developer → Directory → Infrastructure Secrets Management → Create a
    Service Account** named `honeybot-hermes-ec2`. Scope: `Honeybot` vault
    only, permissions `read_items` + `write_items`.

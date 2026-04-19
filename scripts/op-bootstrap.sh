@@ -54,6 +54,16 @@ op item get "Slack Bot" --vault "$VAULT" >/dev/null 2>&1 || \
     'signing_secret[password]=REPLACE' \
     'allowed_user_ids[text]=U_MICHELLE_ID'
 
+# Mem0 — long-term memory provider for Hermes. Get a key at app.mem0.ai
+# and replace the placeholder before first boot (the container refuses to
+# start without a resolvable MEM0_API_KEY — it is marked @required).
+op item get "Mem0" --vault "$VAULT" >/dev/null 2>&1 || \
+  op item create \
+    --category "API Credential" \
+    --vault "$VAULT" \
+    --title "Mem0" \
+    'key[password]=REPLACE_WITH_MEM0_KEY'
+
 # HubSpot \u2014 empty on purpose. The hubspot skill fills this in at runtime
 # when Michelle pastes her PAK in Slack DM.
 op item get "HubSpot" --vault "$VAULT" >/dev/null 2>&1 || \
@@ -65,6 +75,6 @@ op item get "HubSpot" --vault "$VAULT" >/dev/null 2>&1 || \
 
 echo ""
 echo "Seed items created in vault '${VAULT}'. Next:"
-echo "  - 1Password web UI > fill in REPLACE values for 'Anthropic API' and 'Slack Bot'"
+echo "  - 1Password web UI > fill in REPLACE values for 'Anthropic API', 'Mem0', and 'Slack Bot'"
 echo "  - Create the 'honeybot-hermes-ec2' service account and scope it to this vault"
 echo "  - Save the ops_... token as OP_SERVICE_ACCOUNT_TOKEN in ./op.env (chmod 600)"

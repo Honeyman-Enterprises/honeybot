@@ -176,6 +176,15 @@ WORKDIR /home/honeybot
 # can open PRs against itself. Isolated from .hermes/ intentionally.
 RUN mkdir -p .hermes/config .hermes/skills .hermes/data workspace
 
+# ---- Memory provider: Mem0 -------------------------------------------------
+# Select Mem0 as the long-term memory backend. The API key itself is injected
+# at container start via MEM0_API_KEY (resolved by Varlock from
+# op://Honeybot/Mem0/key). We bake the *provider selection* into the image
+# because the only persistent volume is .hermes/data — config written by
+# `hermes config set` would otherwise be lost on every container recreation.
+# Idempotent; safe across image rebuilds.
+RUN hermes config set memory.provider mem0
+
 COPY --chown=honeybot:honeybot skills/         ./.hermes/skills/
 COPY --chown=honeybot:honeybot .env.schema     ./
 

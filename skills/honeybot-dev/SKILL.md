@@ -27,24 +27,50 @@ edits, opens a pull request, and reports the URL back. It **never merges**.
 
 It does **not** redeploy itself. Redeploy happens when:
 1. A human reviews and merges the PR on GitHub.
-2. The `publish-image` workflow builds and pushes a new image to ghcr.io.
-3. Watchtower (running alongside the bot) detects the new image digest and
-   restarts the container.
+2. Someone (or cron, via `scripts/pull-and-restart.sh`) runs a git pull +
+   `docker compose up -d --build` on the EC2 host, which rebuilds the image
+   from the updated Dockerfile and restarts the container.
 
-Three separate gates. The bot's authority ends at "PR opened".
+Two separate gates — merge, then rebuild. The bot's authority ends at
+"PR opened". No registry, no Watchtower: the repo is public, we build from
+source on the host.
 
 ## Identity model
 
 This skill is an exception to the per-user pattern. It acts as a dedicated
-GitHub identity — call it `honeybot-bot` — with a fine-scoped PAT or
-GitHub App installation that has `contents:write` + `pull_requests:write`
-on exactly one repo: the honeybot repo itself.
+GitHub identity — a **GitHub App** installed on exactly one repo (the
+honeybot repo itself) with `contents:write` + `pull_requests:write` and
+nothing else.
 
-Token location:
+Why a GitHub App, not a PAT:
+- Scoped to one repo (install scope, not token scope)
+- Short-lived installation tokens (~60 min) minted on demand from the
+  App's private key — no long-lived bearer sitting in a vault
+- Revocable by uninstalling the App; no rotation of downstream callers
+- Auditable: every action attributes to the App, not to a human user
 
+Vault layout (`op://Honeybot/GitHub Bot/...`):
+
+| Field              | Sensitive | Purpose                                      |
+|--------------------|-----------|----------------------------------------------|
+| `app_id`           | no        | Numeric App ID (shown on App settings page)  |
+| `installation_id`  | no        | Install ID on the honeybot repo              |
+| `private_key`      | yes       | Full PEM contents of the App's private key   |
+| `dev_slack_users`  | no        | Comma-separated Slack UIDs allowed to invoke |
+
+Setup runbook: `docs/github-app-setup.md`.
+
+Token minting (runtime):
+
+```bash
+GH_TOKEN="$(skills/_lib/gh-app-token.sh)"
+export GH_TOKEN
 ```
-op://Honeybot/GitHub Bot/token
-```
+
+`gh-app-token.sh` reads the three vault fields, signs an RS256 JWT with
+`openssl`, POSTs `/app/installations/{id}/access_tokens`, and writes the
+resulting `ghs_...` token to stdout. `init-workspace.sh` does this
+automatically — skills should not call it directly.
 
 Commit identity:
 

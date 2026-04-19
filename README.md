@@ -73,6 +73,15 @@ docker compose up --build
 
 DM "ping" to the bot in Slack. You should get a reply within a few seconds.
 
+Two services come up: `hermes` (the bot) and `redeploy` (the auto-updater
+sidecar — polls origin/main and rebuilds when it moves; see
+`redeploy/watch.sh`). For iterating locally you usually want the sidecar
+out of the way:
+
+```bash
+docker compose up --build hermes   # skip the sidecar while hacking
+```
+
 ### 4. EC2 deployment
 
 1. Launch `t4g.small`, Amazon Linux 2023 **arm64**, 20 GB gp3. Security group:
@@ -83,11 +92,14 @@ DM "ping" to the bot in Slack. You should get a reply within a few seconds.
    echo "OP_SERVICE_ACCOUNT_TOKEN=ops_..." | sudo tee /etc/honeybot/op.env
    sudo chown ec2-user:ec2-user /etc/honeybot/op.env
    sudo chmod 600 /etc/honeybot/op.env
+   git clone https://github.com/Honeyman-Enterprises/honeybot.git ~/honeybot
+   cd ~/honeybot
+   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
    ```
-4. From your laptop:
-   ```bash
-   HONEYBOT_HOST=ec2-xx-xx-xx-xx.compute.amazonaws.com ./scripts/deploy.sh
-   ```
+
+After that, merging a PR to `main` is the only action required to ship —
+the `redeploy` sidecar handles pull + rebuild + restart within
+`HONEYBOT_POLL_INTERVAL` seconds (default 120).
 
 ### 5. HubSpot v1 (install + auth)
 
@@ -121,14 +133,18 @@ The bot will:
 honeybot/
 ├── .env.schema              # Varlock schema (committed, no secret values)
 ├── .env.local.example       # template for developer overrides
-├── Dockerfile               # multi-arch (amd64 + arm64) image
-├── docker-compose.yml       # base compose (local + prod)
+├── Dockerfile               # multi-arch (amd64 + arm64) hermes image
+├── docker-compose.yml       # base compose (hermes + redeploy sidecar)
 ├── docker-compose.prod.yml  # prod overlay (uses /etc/honeybot/op.env)
 ├── bootstrap/               # dev-machine and EC2 bootstrap scripts
 ├── hermes-config/           # hermes.toml, gateway.toml
+├── redeploy/                # auto-updater sidecar (Dockerfile + watch.sh)
 ├── skills/
+│   ├── _lib/                # gh-app-token.sh, creds.sh (shared helpers)
+│   ├── honeybot-dev/        # self-edit-and-PR skill
 │   └── hubspot/             # v1 install + auth skill
-├── scripts/                 # op-bootstrap.sh, deploy.sh
+├── scripts/                 # op-bootstrap.sh, pull-and-restart.sh, deploy.sh
+├── docs/                    # github-app-setup.md, runbooks
 └── .githooks/pre-commit     # secret-leak guard
 ```
 

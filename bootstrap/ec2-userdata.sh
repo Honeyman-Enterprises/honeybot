@@ -6,12 +6,12 @@
 #   - Updates the base OS
 #   - Installs Docker + compose plugin + git
 #   - Installs 1Password CLI (op) for arm64
-#   - Creates /etc/honeybot/ with the right permissions for the op.env secret
 #   - Clones the honeybot repo and does a first build (using a deploy key OR
 #     falls back to a placeholder state \u2014 see comments below)
 #
-# After this runs you must SSH in ONCE to write /etc/honeybot/op.env and
-# `docker compose up -d`. See bootstrap/README or main README for the runbook.
+# After this runs you must SSH in ONCE to write ./op.env in the repo dir
+# (see "Next steps" at the bottom) and `docker compose up -d`.
+# See bootstrap/README or main README for the runbook.
 
 set -euo pipefail
 exec > >(tee -a /var/log/honeybot-userdata.log) 2>&1
@@ -49,12 +49,10 @@ rm /tmp/op.zip
 op --version
 
 # ---- Secret location ------------------------------------------------------
-# The ONLY plaintext secret on disk will be OP_SERVICE_ACCOUNT_TOKEN here.
-# chmod 600, owned by ec2-user (who runs docker compose).
-install -d -m 700 -o ec2-user -g ec2-user /etc/honeybot
-echo "==> /etc/honeybot ready. Write op.env manually on first deploy:"
-echo "    echo 'OP_SERVICE_ACCOUNT_TOKEN=ops_...' | sudo tee /etc/honeybot/op.env"
-echo "    sudo chown ec2-user:ec2-user /etc/honeybot/op.env && sudo chmod 600 /etc/honeybot/op.env"
+# The ONLY plaintext secret on disk will be OP_SERVICE_ACCOUNT_TOKEN, at
+# ./op.env in the cloned repo dir (same path as local dev). Gitignored and
+# excluded from the image build. ec2-user owns the clone, so no sudo needed.
+echo "==> Secret file location: /home/ec2-user/honeybot/op.env (created by hand on first deploy — see Next steps)"
 
 # ---- Clone repo (optional) ------------------------------------------------
 # If you want user-data to clone on first boot, configure a read-only deploy
@@ -75,11 +73,11 @@ echo "    sudo chown ec2-user:ec2-user /etc/honeybot/op.env && sudo chmod 600 /e
 # `scripts/pull-and-restart.sh` when a new commit lands. Nothing to wire
 # into host cron on the happy path.
 echo "==> Next steps:"
-echo "    1. ssh in"
-echo "    2. echo 'OP_SERVICE_ACCOUNT_TOKEN=ops_...' | sudo tee /etc/honeybot/op.env"
-echo "       sudo chown ec2-user:ec2-user /etc/honeybot/op.env && sudo chmod 600 /etc/honeybot/op.env"
-echo "    3. git clone https://github.com/Honeyman-Enterprises/honeybot.git ~/honeybot"
-echo "    4. cd ~/honeybot && docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build"
+echo "    1. ssh / SSM in as ec2-user"
+echo "    2. git clone https://github.com/Honeyman-Enterprises/honeybot.git ~/honeybot"
+echo "    3. cd ~/honeybot"
+echo "       echo 'OP_SERVICE_ACCOUNT_TOKEN=ops_...' > op.env && chmod 600 op.env"
+echo "    4. docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build"
 echo "       (starts both 'honeybot' and the 'redeploy' sidecar; the latter"
 echo "        auto-rebuilds when origin/main moves)"
 echo "==> honeybot user-data finished at $(date -u)"

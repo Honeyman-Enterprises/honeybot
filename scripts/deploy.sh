@@ -4,7 +4,9 @@
 # Assumes:
 #   - You can SSH as ec2-user@$HONEYBOT_HOST using your configured key.
 #   - The instance has already run bootstrap/ec2-userdata.sh (docker, op, dirs).
-#   - /etc/honeybot/op.env exists on the instance with OP_SERVICE_ACCOUNT_TOKEN.
+#   - ${REMOTE_DIR}/op.env exists with OP_SERVICE_ACCOUNT_TOKEN, chmod 600,
+#     owned by ec2-user. (Created by hand on first deploy — see the Next
+#     steps block that ec2-userdata.sh echoes to /var/log/honeybot-userdata.log.)
 #
 # Usage:
 #   HONEYBOT_HOST=ec2-xx-xx-xx-xx.compute.amazonaws.com ./scripts/deploy.sh
@@ -60,8 +62,10 @@ ssh "${SSH_USER}@${HONEYBOT_HOST}" bash -lc "'
   docker load -i /tmp/honeybot-hermes-prod.tar
   rm /tmp/honeybot-hermes-prod.tar
   cd \"${REMOTE_DIR}\"
-  # On prod, op.env lives at /etc/honeybot/op.env \u2014 symlink so compose finds it.
-  [ -L op.env ] || ln -sf /etc/honeybot/op.env op.env
+  # op.env lives at \${REMOTE_DIR}/op.env in both dev and prod — no symlink
+  # dance. Refuse to continue if it's missing so we surface the real error
+  # instead of letting docker compose produce a confusing one.
+  [ -f op.env ] || { echo \"deploy: ${REMOTE_DIR}/op.env missing on host\" >&2; exit 1; }
   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
   docker compose logs --tail=50
 '"

@@ -87,15 +87,16 @@ docker compose up --build honeybot   # skip the sidecar while hacking
 1. Launch `t4g.small`, Amazon Linux 2023 **arm64**, 20 GB gp3. Security group:
    inbound = SSH from your IP only; outbound = all.
 2. Paste `bootstrap/ec2-userdata.sh` into the "User data" field on launch.
-3. SSH in once:
+3. SSH (or SSM) in once:
    ```bash
-   echo "OP_SERVICE_ACCOUNT_TOKEN=ops_..." | sudo tee /etc/honeybot/op.env
-   sudo chown ec2-user:ec2-user /etc/honeybot/op.env
-   sudo chmod 600 /etc/honeybot/op.env
    git clone https://github.com/Honeyman-Enterprises/honeybot.git ~/honeybot
    cd ~/honeybot
+   echo "OP_SERVICE_ACCOUNT_TOKEN=ops_..." > op.env && chmod 600 op.env
    docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
    ```
+
+   Same `./op.env` path and permissions as local dev — nothing special
+   about prod. Gitignored, dockerignored, chmod 600, owned by `ec2-user`.
 
 After that, merging a PR to `main` is the only action required to ship —
 the `redeploy` sidecar handles pull + rebuild + restart within
@@ -117,7 +118,8 @@ The bot will:
 ## Safety model
 
 - The **only** plaintext secret on any host is `OP_SERVICE_ACCOUNT_TOKEN`,
-  stored at `./op.env` (local) or `/etc/honeybot/op.env` (EC2) with `chmod 600`.
+  stored at `./op.env` in the repo root (same path in local dev and on
+  EC2) with `chmod 600`, gitignored and dockerignored.
 - All other secrets live in the 1Password `Honeybot` vault. Varlock resolves
   them at container start via `varlock run -- hermes gateway start`.
 - The Slack gateway enforces an allowlist of user IDs (`SLACK_ALLOWED_USER_IDS`);
@@ -135,7 +137,7 @@ honeybot/
 ├── .env.local.example       # template for developer overrides
 ├── Dockerfile               # multi-arch (amd64 + arm64) hermes image
 ├── docker-compose.yml       # base compose (honeybot + redeploy sidecar)
-├── docker-compose.prod.yml  # prod overlay (uses /etc/honeybot/op.env)
+├── docker-compose.prod.yml  # prod overlay (restart policy only)
 ├── bootstrap/               # dev-machine and EC2 bootstrap scripts
 ├── hermes-config/           # hermes.toml, gateway.toml
 ├── redeploy/                # auto-updater sidecar (Dockerfile + watch.sh)

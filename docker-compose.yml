@@ -27,8 +27,12 @@ services:
     restart: unless-stopped
 
     env_file:
-      # Local dev: ./op.env in the repo root (gitignored).
-      # Prod: overridden to /etc/honeybot/op.env via docker-compose.prod.yml.
+      # ./op.env in the repo root — same path in dev and prod.
+      # Gitignored (.gitignore) and excluded from the image build
+      # (.dockerignore). The redeploy sidecar sees the same file via
+      # the `.:/repo` bind mount, so its `docker compose up --build`
+      # resolves this env_file without any extra wiring.
+      #
       # Contains ONLY OP_SERVICE_ACCOUNT_TOKEN=ops_... (plus non-secret
       # overrides like HONEYBOT_SLACK_USER during local testing).
       - ./op.env

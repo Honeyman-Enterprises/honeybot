@@ -150,7 +150,7 @@ message from the helper (one line above) tells you which one.
 | Installation ID          | `op://Honeybot/GitHub Bot/installation_id`   |
 | Dev allow-list           | `op://Honeybot/GitHub Bot/dev_slack_users`   |
 | Token-minting helper     | `skills/_lib/gh-app-token.sh` (in image)     |
-| Service account token    | `/etc/honeybot/op.env` on EC2, `./op.env` dev |
+| Service account token    | `./op.env` in repo root (same path dev + EC2) |
 
 The service account token is the root of trust: it can read the App
 credentials from 1Password. Guard it accordingly (the EC2 bootstrap places

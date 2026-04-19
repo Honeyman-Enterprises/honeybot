@@ -35,8 +35,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # - git: hermes install from source
 # - ca-certificates, gnupg: TLS + NodeSource / Google apt keys
 # - nodejs/npm: varlock CLI + @hubspot/cli (pre-installed below)
+# - openssl: sign GitHub App JWTs (RS256) in skills/_lib/gh-app-token.sh
+# - jq: parse the installation-token JSON response from the GitHub App flow
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      curl unzip xz-utils git ca-certificates gnupg \
+      curl unzip xz-utils git ca-certificates gnupg openssl jq \
  && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
  && apt-get install -y --no-install-recommends nodejs \
  && rm -rf /var/lib/apt/lists/*

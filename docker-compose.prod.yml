@@ -1,17 +1,19 @@
 # Production overlay — use on EC2.
 #
-#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 #
 # Differences vs base compose:
-#   - Secret env_file is read from /etc/honeybot/op.env (root-provisioned,
-#     chmod 600) instead of ./op.env in the repo directory.
-#   - restart: always (survive host reboots).
-#   - Watchtower stays enabled; that's the whole point on prod.
+#   - hermes reads the service-account token from /etc/honeybot/op.env
+#     (root-provisioned, chmod 600) instead of ./op.env in the repo dir.
+#   - restart: always on hermes (survive host reboots).
+#   - redeploy sidecar gets /etc/honeybot bind-mounted read-only so its
+#     `docker compose up -d --build` can resolve hermes's env_file path
+#     (env_file is resolved by the compose CLI, not the daemon — so the
+#     path must exist inside the container running compose).
 #
-# The image itself comes from ghcr.io via the base compose. To pin to a
-# specific digest instead of :latest (e.g. for rollback), export
-# HONEYBOT_IMAGE=ghcr.io/honeyman-enterprises/honeybot@sha256:... before
-# bringing the stack up, and Watchtower will stop auto-updating that tag.
+# Redeploy after a PR merges: handled automatically by the `redeploy`
+# sidecar. Manual equivalent:
+#   git pull && docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 
 services:
   hermes:
@@ -19,14 +21,10 @@ services:
       - /etc/honeybot/op.env
     restart: always
 
-  watchtower:
+  redeploy:
+    volumes:
+      # Needed so compose inside the sidecar can read hermes's env_file
+      # when rebuilding against the prod overlay. Read-only — the sidecar
+      # has no business writing to the host's secrets directory.
+      - /etc/honeybot:/etc/honeybot:ro
     restart: always
-    environment:
-      # On prod we want updates to flow automatically. Override the poll
-      # interval from the host via HONEYBOT_WATCHTOWER_INTERVAL if needed
-      # (base compose defaults to 300s).
-      WATCHTOWER_LABEL_ENABLE: "true"
-      WATCHTOWER_CLEANUP: "true"
-      WATCHTOWER_ROLLING_RESTART: "true"
-      WATCHTOWER_NO_STARTUP_MESSAGE: "true"
-      WATCHTOWER_POLL_INTERVAL: ${HONEYBOT_WATCHTOWER_INTERVAL:-300}

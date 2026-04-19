@@ -60,5 +60,18 @@ echo "    sudo chown ec2-user:ec2-user /etc/honeybot/op.env && sudo chmod 600 /e
 #   git clone git@github.com:honeyman/honeybot.git ~/honeybot
 # '
 
+# ---- Redeploy model -------------------------------------------------------
+# The honeybot repo is public. We build straight from the Dockerfile on each
+# deploy — no registry. Auto-redeploy is handled by the `redeploy` sidecar
+# in docker-compose.yml, which polls origin/main and re-runs
+# `scripts/pull-and-restart.sh` when a new commit lands. Nothing to wire
+# into host cron on the happy path.
+echo "==> Next steps:"
+echo "    1. ssh in"
+echo "    2. echo 'OP_SERVICE_ACCOUNT_TOKEN=ops_...' | sudo tee /etc/honeybot/op.env"
+echo "       sudo chown ec2-user:ec2-user /etc/honeybot/op.env && sudo chmod 600 /etc/honeybot/op.env"
+echo "    3. git clone https://github.com/Honeyman-Enterprises/honeybot.git ~/honeybot"
+echo "    4. cd ~/honeybot && docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build"
+echo "       (starts both 'hermes' and the 'redeploy' sidecar; the latter"
+echo "        auto-rebuilds when origin/main moves)"
 echo "==> honeybot user-data finished at $(date -u)"
-echo "==> Next: ssh in, write /etc/honeybot/op.env, clone repo, \`docker compose up -d\`"

@@ -2,7 +2,8 @@
 # init-workspace.sh — idempotent setup for the honeybot-dev skill.
 #
 # - Enforces the dev allow-list.
-# - Loads the bot's GitHub PAT into GH_TOKEN and configures gh + git.
+# - Mints a short-lived GitHub App installation token (via gh-app-token.sh)
+#   and exports it as GH_TOKEN for this process.
 # - Clones the honeybot repo into ~/workspace/honeybot, or fast-forwards
 #   if it already exists.
 #
@@ -10,8 +11,11 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GH_APP_TOKEN_SCRIPT="${SCRIPT_DIR}/../../_lib/gh-app-token.sh"
+
 WORKSPACE="${HOME}/workspace/honeybot"
-REPO_SLUG="${HONEYBOT_REPO_SLUG:?HONEYBOT_REPO_SLUG must be set (e.g. honeyman/honeybot)}"
+REPO_SLUG="${HONEYBOT_REPO_SLUG:?HONEYBOT_REPO_SLUG must be set (e.g. Honeyman-Enterprises/honeybot)}"
 BASE_BRANCH="${HONEYBOT_DEV_BASE_BRANCH:-main}"
 SLACK_USER="${HONEYBOT_SLACK_USER:?HONEYBOT_SLACK_USER must be set}"
 
@@ -26,14 +30,20 @@ if [[ ",${allowed}," != *",${SLACK_USER},"* ]]; then
   exit 3
 fi
 
-# ----- Load bot GitHub token ------------------------------------------------
-if ! GH_TOKEN="$(op read 'op://Honeybot/GitHub Bot/token' 2>/dev/null)"; then
-  echo "init-workspace: cannot read GitHub bot token from 1Password." >&2
-  echo "               expected op://Honeybot/GitHub Bot/token" >&2
+# ----- Mint GitHub App installation token ----------------------------------
+# The App's private key stays in 1Password; this helper signs a JWT, exchanges
+# it for a ~60-minute installation token, and writes the token to stdout only.
+if [[ ! -x "$GH_APP_TOKEN_SCRIPT" ]]; then
+  echo "init-workspace: missing helper ${GH_APP_TOKEN_SCRIPT}" >&2
+  exit 2
+fi
+if ! GH_TOKEN="$("$GH_APP_TOKEN_SCRIPT")"; then
+  echo "init-workspace: could not mint GitHub App installation token." >&2
+  echo "               see docs/github-app-setup.md for vault layout." >&2
   exit 2
 fi
 export GH_TOKEN
-# gh also respects GITHUB_TOKEN; unset it to avoid ambiguity.
+# gh also respects GITHUB_TOKEN; unset it so our ghs_... token is the one used.
 unset GITHUB_TOKEN
 
 # ----- Commit identity ------------------------------------------------------

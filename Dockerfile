@@ -72,7 +72,12 @@ RUN npm install -g \
 # Clone + editable install. Pin to a tag/SHA once we've verified one.
 WORKDIR /opt
 RUN git clone --depth=1 https://github.com/NousResearch/hermes-agent.git hermes \
- && cd hermes && pip install --no-cache-dir -e '.[slack]'
+ && cd hermes && pip install --no-cache-dir -e '.[slack]' \
+ && python3 -c "import yaml, pathlib, subprocess, sys; \
+deps = sorted({d for p in pathlib.Path('plugins').rglob('plugin.yaml') \
+               for d in (yaml.safe_load(p.read_text()) or {}).get('pip_dependencies', []) or []}); \
+print('Plugin pip deps:', deps); \
+deps and subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--no-cache-dir', *deps])"
 
 # ---- HubSpot CLI -----------------------------------------------------------
 # Pre-installed globally as root so `honeybot` (non-root) can invoke `hs`

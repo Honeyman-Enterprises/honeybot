@@ -70,22 +70,27 @@ You should now have a file like
 
 In the `Honeybot` vault, edit the existing `GitHub Bot` item (or create it
 if it doesn't exist yet — the service account needs `write_items` on this
-vault). Add three fields:
+vault). Add two text fields and attach the `.pem` file:
 
-| Field               | Type     | Value                                         |
-|---------------------|----------|-----------------------------------------------|
-| `app_id`            | text     | The numeric App ID from step 1                |
-| `installation_id`   | text     | The numeric Installation ID from step 3       |
-| `private_key`       | password | Paste the **entire** PEM including `BEGIN`/`END` lines |
+| Key                        | Kind          | Value                                         |
+|----------------------------|---------------|-----------------------------------------------|
+| `app_id`                   | text field    | The numeric App ID from step 1                |
+| `installation_id`          | text field    | The numeric Installation ID from step 3       |
+| `github-honeybot.pem`      | attached file | The `.pem` file you downloaded from GitHub    |
 
-The PEM must include line breaks. 1Password password fields preserve them
-correctly; if you paste into a plain "text" field the newlines may be
-stripped and the token mint will fail with "PEM key likely malformed".
+**Upload the PEM as an attachment**, not as a password/text field. 1Password's
+standard text/password fields are single-line and collapse newlines, which
+mangles the PEM format and breaks openssl. Attachments preserve the raw
+bytes.
+
+(If your vault already has a `private_key` *text* field from an older setup,
+`gh-app-token.sh` will fall back to it — but prefer the attachment for new
+installs.)
 
 Verify with:
 
 ```bash
-op read 'op://Honeybot/GitHub Bot/private_key' | head -1
+op read 'op://Honeybot/GitHub Bot/github-honeybot.pem' | head -1
 # expected: -----BEGIN RSA PRIVATE KEY-----
 # (or "-----BEGIN PRIVATE KEY-----" for PKCS#8)
 ```
@@ -102,9 +107,9 @@ shred -u ~/Downloads/honeybot-self-edit.*.private-key.pem
 ```
 
 If the key ever leaks: go back to the App settings, click **Delete** on the
-old key, generate a new one, update `op://Honeybot/GitHub Bot/private_key`.
-Existing installation tokens stay valid until their TTL expires (~60 min
-max).
+old key, generate a new one, and re-upload it as the `github-honeybot.pem`
+attachment on the `GitHub Bot` item. Existing installation tokens stay valid
+until their TTL expires (~60 min max).
 
 ## 6. Set the dev allow-list
 
@@ -145,7 +150,7 @@ message from the helper (one line above) tells you which one.
 | Thing                    | Location                                     |
 |--------------------------|----------------------------------------------|
 | App definition           | GitHub org → Developer settings              |
-| App private key          | `op://Honeybot/GitHub Bot/private_key`       |
+| App private key          | `op://Honeybot/GitHub Bot/github-honeybot.pem` (attachment) |
 | App ID                   | `op://Honeybot/GitHub Bot/app_id`            |
 | Installation ID          | `op://Honeybot/GitHub Bot/installation_id`   |
 | Dev allow-list           | `op://Honeybot/GitHub Bot/dev_slack_users`   |

@@ -51,12 +51,22 @@ Why a GitHub App, not a PAT:
 
 Vault layout (`op://Honeybot/GitHub Bot/...`):
 
-| Field              | Sensitive | Purpose                                      |
-|--------------------|-----------|----------------------------------------------|
-| `app_id`           | no        | Numeric App ID (shown on App settings page)  |
-| `installation_id`  | no        | Install ID on the honeybot repo              |
-| `private_key`      | yes       | Full PEM contents of the App's private key   |
-| `dev_slack_users`  | no        | Comma-separated Slack UIDs allowed to invoke |
+| Key                         | Kind          | Purpose                                      |
+|-----------------------------|---------------|----------------------------------------------|
+| `app_id`                    | text field    | Numeric App ID (shown on App settings page)  |
+| `installation_id`           | text field    | Install ID on the honeybot repo              |
+| `github-honeybot.pem`       | attached file | The App's PEM private key                    |
+| `dev_slack_users`           | text field    | Comma-separated Slack UIDs allowed to invoke |
+
+The private key is stored as an **attached file**, not a text field. 1Password's
+standard text/password fields are single-line and collapse newlines on save,
+which mangles the PEM format and breaks openssl signing. Uploading the `.pem`
+as an attachment preserves the raw bytes, and `op read` with the attachment
+filename (`github-honeybot.pem`) as the last URL segment streams the decoded
+contents back out.
+
+For legacy vault layouts, `gh-app-token.sh` will fall back to a text field
+literally named `private_key` if no attachment is found.
 
 Setup runbook: `docs/github-app-setup.md`.
 

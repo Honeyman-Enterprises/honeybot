@@ -10,9 +10,22 @@
 #     - Auditable: every API call in the audit log attributes to the App
 #
 # Inputs (read from 1Password via `op`):
-#   op://Honeybot/GitHub Bot/app_id            — the App's numeric ID
-#   op://Honeybot/GitHub Bot/installation_id   — the install on this repo
-#   op://Honeybot/GitHub Bot/private_key       — the App's PEM private key
+#   op://Honeybot/GitHub Bot/app_id                 — the App's numeric ID
+#   op://Honeybot/GitHub Bot/installation_id        — the install on this repo
+#   op://Honeybot/GitHub Bot/github-honeybot.pem    — the App's PEM private key
+#                                                     (ATTACHED FILE, not a text field)
+#
+# Why the PEM is an attached file, not a text field:
+#   1Password's standard text/password fields are single-line and collapse
+#   newlines on save, which mangles the PEM format so openssl can't parse it.
+#   Attached files preserve the raw bytes. `op read` with the filename as the
+#   third URL segment returns the decoded contents on stdout.
+#
+#   PEM_FILE (env, default "github-honeybot.pem") lets you override the
+#   attached filename if you name it differently in the vault.
+#
+#   For backward-compat, if the attached file can't be read, falls back to
+#   a text field literally named "private_key".
 #
 # Output:
 #   Prints the installation token (ghs_...) to stdout. Nothing else goes to
@@ -52,7 +65,13 @@ op_read() {
 
 app_id="$(op_read "op://${VAULT}/${ITEM}/app_id")"
 installation_id="$(op_read "op://${VAULT}/${ITEM}/installation_id")"
-private_key="$(op_read "op://${VAULT}/${ITEM}/private_key")"
+
+# PEM: attached file preferred (preserves newlines); fall back to text field
+# for backward compatibility with older vault layouts.
+: "${PEM_FILE:=github-honeybot.pem}"
+if ! private_key="$(op read "op://${VAULT}/${ITEM}/${PEM_FILE}" 2>/dev/null)" || [[ -z "$private_key" ]]; then
+    private_key="$(op_read "op://${VAULT}/${ITEM}/private_key")"
+fi
 
 [[ "$app_id" =~ ^[0-9]+$ ]] \
   || die "app_id '${app_id}' is not numeric — check the vault item"

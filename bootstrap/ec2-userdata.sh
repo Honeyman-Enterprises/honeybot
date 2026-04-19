@@ -19,7 +19,15 @@ echo "==> honeybot user-data starting at $(date -u)"
 
 # ---- OS + Docker ----------------------------------------------------------
 dnf update -y
-dnf install -y docker git curl unzip tar jq
+# NOTE on curl: AL2023 ships `curl-minimal` in the base AMI. We do NOT list
+# `curl` explicitly — the minimal build handles every curl invocation in this
+# script. BUT transitive deps (e.g. a package that `Requires: curl` rather
+# than `curl-minimal`) can still trigger the `curl-minimal` vs `curl` file
+# conflict on /usr/bin/curl, which aborts the whole dnf transaction under
+# `set -e`. `--allowerasing` lets dnf swap curl-minimal → curl if a dep
+# demands it. Net cost: ~1 MB and slightly more attack surface. Worth it
+# for a bootstrap that must not fail.
+dnf install -y --allowerasing docker git unzip tar jq
 systemctl enable --now docker
 usermod -aG docker ec2-user
 

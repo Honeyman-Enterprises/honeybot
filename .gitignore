@@ -7,9 +7,9 @@ secrets/
 op.env
 *.op.env
 
-# Hermes runtime data (memory, FTS, skill state)
+# Agent runtime data (memory, FTS, skill state)
 .hermes/
-hermes-data/
+honeybot-data/
 
 # Docker / build artifacts
 *.log

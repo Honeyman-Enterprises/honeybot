@@ -72,6 +72,6 @@ echo "    2. echo 'OP_SERVICE_ACCOUNT_TOKEN=ops_...' | sudo tee /etc/honeybot/op
 echo "       sudo chown ec2-user:ec2-user /etc/honeybot/op.env && sudo chmod 600 /etc/honeybot/op.env"
 echo "    3. git clone https://github.com/Honeyman-Enterprises/honeybot.git ~/honeybot"
 echo "    4. cd ~/honeybot && docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build"
-echo "       (starts both 'hermes' and the 'redeploy' sidecar; the latter"
+echo "       (starts both 'honeybot' and the 'redeploy' sidecar; the latter"
 echo "        auto-rebuilds when origin/main moves)"
 echo "==> honeybot user-data finished at $(date -u)"

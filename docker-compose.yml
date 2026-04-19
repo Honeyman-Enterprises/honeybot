@@ -18,12 +18,12 @@
 name: honeybot
 
 services:
-  hermes:
+  honeybot:
     build:
       context: .
       dockerfile: Dockerfile
-    image: honeybot/hermes:local
-    container_name: honeybot-hermes
+    image: honeybot:local
+    container_name: honeybot
     restart: unless-stopped
 
     env_file:
@@ -42,16 +42,18 @@ services:
       HONEYBOT_COMMIT_EMAIL: ${HONEYBOT_COMMIT_EMAIL:-honeybot@noreply.honeymanenterprises.com}
 
     volumes:
-      # Hermes memory / FTS / skill state. Must persist across restarts.
-      - hermes-data:/home/honeybot/.hermes/data
+      # Agent memory / FTS / skill state. Must persist across restarts.
+      # (Mounted at .hermes/data because that's where the upstream hermes
+      # runtime writes its state — the path is its convention, not ours.)
+      - honeybot-data:/home/honeybot/.hermes/data
       # Self-edit workspace (clone of this repo). The honeybot-dev skill
       # lives here. Persists so a branch survives a container restart.
-      - hermes-workspace:/home/honeybot/workspace
+      - honeybot-workspace:/home/honeybot/workspace
 
     # No `ports:` — Slack Socket Mode is outbound-only. Nothing listens.
 
-    # Resource ceiling for t4g.small (2 GB RAM). Hermes idle is small; leave
-    # headroom for skill subprocesses (npm install of HubSpot CLI, etc.).
+    # Resource ceiling for t4g.small (2 GB RAM). Honeybot idle is small;
+    # leave headroom for skill subprocesses (npm install of HubSpot CLI, etc.).
     mem_limit: 1536m
     memswap_limit: 1536m
 
@@ -64,7 +66,7 @@ services:
     networks: [honeynet]
 
   # ---------------------------------------------------------------------
-  # Redeploy sidecar — polls origin/main, rebuilds hermes when it moves.
+  # Redeploy sidecar — polls origin/main, rebuilds honeybot when it moves.
   # ---------------------------------------------------------------------
   # Replaces what Watchtower would do in a registry-based world. See
   # redeploy/watch.sh for the loop logic and redeploy/Dockerfile for the
@@ -127,8 +129,8 @@ services:
     # during build). Default bridge is fine.
 
 volumes:
-  hermes-data:
-  hermes-workspace:
+  honeybot-data:
+  honeybot-workspace:
 
 networks:
   honeynet:

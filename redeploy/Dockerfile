@@ -3,7 +3,7 @@
 # Tiny image whose only job is:
 #   loop { git fetch origin main; if new commits: docker compose up -d --build }
 #
-# Runs alongside the `hermes` service in docker-compose.yml. Bind-mounts the
+# Runs alongside the `honeybot` service in docker-compose.yml. Bind-mounts the
 # host's docker socket so it can issue `docker compose` against the host
 # daemon, and bind-mounts the repo so `git fetch` on the host is reflected
 # here. No GitHub App auth needed — the repo is public, anonymous HTTPS fetch

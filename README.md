@@ -73,13 +73,13 @@ docker compose up --build
 
 DM "ping" to the bot in Slack. You should get a reply within a few seconds.
 
-Two services come up: `hermes` (the bot) and `redeploy` (the auto-updater
+Two services come up: `honeybot` (the bot) and `redeploy` (the auto-updater
 sidecar — polls origin/main and rebuilds when it moves; see
 `redeploy/watch.sh`). For iterating locally you usually want the sidecar
 out of the way:
 
 ```bash
-docker compose up --build hermes   # skip the sidecar while hacking
+docker compose up --build honeybot   # skip the sidecar while hacking
 ```
 
 ### 4. EC2 deployment
@@ -134,7 +134,7 @@ honeybot/
 ├── .env.schema              # Varlock schema (committed, no secret values)
 ├── .env.local.example       # template for developer overrides
 ├── Dockerfile               # multi-arch (amd64 + arm64) hermes image
-├── docker-compose.yml       # base compose (hermes + redeploy sidecar)
+├── docker-compose.yml       # base compose (honeybot + redeploy sidecar)
 ├── docker-compose.prod.yml  # prod overlay (uses /etc/honeybot/op.env)
 ├── bootstrap/               # dev-machine and EC2 bootstrap scripts
 ├── hermes-config/           # hermes.toml, gateway.toml

@@ -8,7 +8,7 @@ secrets/
 op.env
 *.op.env
 .hermes/
-hermes-data/
+honeybot-data/
 node_modules/
 __pycache__/
 *.pyc

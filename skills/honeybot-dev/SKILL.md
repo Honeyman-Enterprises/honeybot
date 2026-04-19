@@ -103,7 +103,7 @@ not, refuse:
 /home/honeybot/workspace/honeybot
 ```
 
-This is mounted as a Docker named volume (`hermes-workspace`) in
+This is mounted as a Docker named volume (`honeybot-workspace`) in
 docker-compose, so branches survive container restarts. The workspace is
 NOT the image's source tree — it's a full clone the bot reads and writes.
 

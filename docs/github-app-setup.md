@@ -121,7 +121,7 @@ list. Adding/removing people is a vault edit, not a redeploy.
 ## 7. Verify from inside the container
 
 ```bash
-docker compose exec hermes bash -lc '
+docker compose exec honeybot bash -lc '
   export HONEYBOT_SLACK_USER=U01ABCDEFGH   # must be in dev_slack_users
   export HONEYBOT_REPO_SLUG=Honeyman-Enterprises/honeybot
   ./skills/honeybot-dev/bin/init-workspace.sh

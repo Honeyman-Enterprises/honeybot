@@ -8,7 +8,7 @@
 #
 # Why a sidecar and not host cron:
 #   - Deploys + redeploys with the compose project. One artifact to ship.
-#   - Logs go to `docker compose logs redeploy` next to hermes logs.
+#   - Logs go to `docker compose logs redeploy` next to honeybot logs.
 #   - No host-side systemd/cron to provision.
 #
 # Why no auth:

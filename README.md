@@ -8,6 +8,8 @@ Michelle. Talks to Claude, installs CLIs on demand, starts with HubSpot.
 - **Secrets:** 1Password service account + [Varlock](https://github.com/dmno-dev/varlock).
 - **Runtime:** Docker (identical image for laptop and EC2).
 - **Host:** EC2 `t4g.small` (ARM / Graviton).
+- **Public traffic:** nginx + Let's Encrypt wildcard cert (since Phase 0). See [`docs/phase-0-infra.md`](docs/phase-0-infra.md).
+- **Backing stores (Phase 0):** Elasticsearch + Neo4j, internal-only containers on the `honeynet` network. No ports published.
 
 See [`async-wandering-marshmallow.md` plan](../..//.claude/plans/async-wandering-marshmallow.md)
 for architectural context.

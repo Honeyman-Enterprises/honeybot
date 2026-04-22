@@ -67,7 +67,19 @@ fi
 # Push the branch. -u sets upstream so subsequent pushes on the same branch
 # work without repeating the remote. --no-force is the default; we never
 # pass --force anywhere in this skill.
-git push -u origin "$branch"
+#
+# GH_TOKEN is a GitHub App installation token (ghs_...) minted by
+# init-workspace.sh. `git push` over HTTPS doesn't auto-pick it up from the
+# env, so we pass it inline via the push URL. `x-access-token` is the
+# GitHub-documented username for App tokens; the token goes in the password
+# slot. URL-embedded creds appear in `git reflog` only as the URL scheme,
+# not the token itself, so this is safe.
+push_url="https://x-access-token:${GH_TOKEN}@github.com/${HONEYBOT_REPO_SLUG:-Honeyman-Enterprises/honeybot}.git"
+git push -u "$push_url" "$branch:$branch"
+
+# Reset the stored upstream to the clean origin URL so subsequent plain
+# `git push` invocations (by humans) don't carry the embedded token.
+git branch --set-upstream-to=origin/"$branch" "$branch" 2>/dev/null || true
 
 # Open the PR. gh auth is done via GH_TOKEN from the env (set by init-workspace).
 pr_url="$(gh pr create \

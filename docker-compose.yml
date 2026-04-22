@@ -132,9 +132,203 @@ services:
     # socket and the internet (for `git fetch` and the compose plugin
     # during build). Default bridge is fine.
 
+  # ---------------------------------------------------------------------
+  # nginx — TLS termination + reverse proxy for public webhook traffic.
+  # ---------------------------------------------------------------------
+  # Listens on 80/443 on the host. TLS certs are issued + renewed by the
+  # certbot service below and shared via the certbot-etc named volume.
+  #
+  # Routes:
+  #   hooks.honeybot.honeymanenterprises.com/webhooks/* → honeybot:8644
+  #   (Hermes webhook listener; enabled by Phase 2 config change.)
+  #
+  # nginx does NOT need the honeynet network for localhost-only traffic,
+  # but must be on it to resolve upstream service names (honeybot, mcp-*).
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    image: honeybot/nginx:local
+    container_name: honeybot-nginx
+    restart: unless-stopped
+
+    ports:
+      - "80:80"
+      - "443:443"
+
+    volumes:
+      # Shared with certbot — certbot writes certs here, nginx reads them.
+      - certbot-etc:/etc/letsencrypt:ro
+      # ACME HTTP-01 webroot (kept as a fallback even though DNS-01 is primary).
+      - certbot-www:/var/www/certbot:ro
+
+    depends_on:
+      certbot:
+        condition: service_started
+
+    mem_limit: 128m
+    memswap_limit: 128m
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+    networks: [honeynet]
+
+  # ---------------------------------------------------------------------
+  # certbot — Let's Encrypt wildcard cert via Route53 DNS-01.
+  # ---------------------------------------------------------------------
+  # Runs as a long-lived container: issues on first start if missing,
+  # then loops every 12h running `certbot renew`. Certs persist on the
+  # shared `certbot-etc` named volume.
+  #
+  # AWS creds for Route53 are scoped to a dedicated IAM user — see
+  # aws-infra/iam-certbot-policy.json. Stored in 1Password at
+  # op://Honeybot/Certbot AWS/*.
+  certbot:
+    build:
+      context: ./certbot
+      dockerfile: Dockerfile
+    image: honeybot/certbot:local
+    container_name: honeybot-certbot
+    restart: unless-stopped
+
+    env_file:
+      - ./op.env
+
+    environment:
+      # Resolved from 1Password by varlock at container start (see
+      # .env.schema entries under "---- Certbot ----").
+      AWS_ACCESS_KEY_ID:     ${CERTBOT_AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${CERTBOT_AWS_SECRET_ACCESS_KEY:-}
+      AWS_DEFAULT_REGION:    ${CERTBOT_AWS_REGION:-us-east-1}
+      CERTBOT_EMAIL:           ${CERTBOT_EMAIL:-}
+      CERTBOT_DOMAIN:          ${CERTBOT_DOMAIN:-honeybot.honeymanenterprises.com}
+      CERTBOT_WILDCARD_DOMAIN: ${CERTBOT_WILDCARD_DOMAIN:-*.honeybot.honeymanenterprises.com}
+      # Flip to "1" on first run to hit LE staging and avoid burning prod
+      # rate limits while debugging. Unset/empty for production issuance.
+      CERTBOT_STAGING: ${CERTBOT_STAGING:-}
+
+    # Wrap entrypoint with varlock so AWS creds + CERTBOT_* env come from
+    # 1Password. The image's entrypoint.sh expects them already exported.
+    entrypoint: ["varlock", "run", "--", "/usr/local/bin/entrypoint.sh"]
+
+    volumes:
+      - certbot-etc:/etc/letsencrypt
+      - certbot-www:/var/www/certbot
+
+    mem_limit: 128m
+    memswap_limit: 128m
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------
+  # elasticsearch — internal only. Backing store for image-ingest MCP.
+  # ---------------------------------------------------------------------
+  # Security is ENABLED (8.x default). Passwords resolved from 1Password
+  # at start (op://Honeybot/Elasticsearch/*). Bound to honeynet only —
+  # never exposed to the host or internet.
+  #
+  # Data persists on `elasticsearch-data`. Snapshots of the underlying
+  # EBS volume are handled by an AWS DLM policy (see aws-infra/).
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
+    container_name: honeybot-elasticsearch
+    restart: unless-stopped
+
+    env_file:
+      - ./op.env
+
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "true"
+      xpack.security.http.ssl.enabled: "false"  # internal network only
+      # Heap. t4g.small has 2GB total; cap ES at 512MB to leave room.
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+      # Resolved from 1Password by varlock (see .env.schema).
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD:-}
+
+    # Never publish ports. Only accessible from containers on honeynet.
+    # ports: []
+
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+
+    mem_limit: 768m
+    memswap_limit: 768m
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -u elastic:${ELASTIC_PASSWORD:-} http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    networks: [honeynet]
+
+  # ---------------------------------------------------------------------
+  # neo4j — internal only. Graph store (schema supplied by user later).
+  # ---------------------------------------------------------------------
+  # v1: stands up an empty Neo4j 5 instance with auth. Do NOT populate
+  # the graph model here — Eric supplies the Cypher directly. See
+  # docs/neo4j.md (to be authored) once schema lands.
+  neo4j:
+    image: neo4j:5.24-community
+    container_name: honeybot-neo4j
+    restart: unless-stopped
+
+    env_file:
+      - ./op.env
+
+    environment:
+      # Resolved from 1Password. NEO4J_AUTH format is "user/password".
+      NEO4J_AUTH: ${NEO4J_AUTH:-}
+      # Heap + pagecache tuned for t4g.small alongside ES.
+      NEO4J_server_memory_heap_initial__size: "256m"
+      NEO4J_server_memory_heap_max__size:     "256m"
+      NEO4J_server_memory_pagecache_size:     "128m"
+
+    # Internal only. Bolt (7687) and HTTP (7474) never published.
+    # ports: []
+
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+
+    mem_limit: 768m
+    memswap_limit: 768m
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    networks: [honeynet]
+
 volumes:
   honeybot-data:
   honeybot-workspace:
+  certbot-etc:
+  certbot-www:
+  elasticsearch-data:
+  neo4j-data:
+  neo4j-logs:
 
 networks:
   honeynet:

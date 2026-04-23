@@ -12,8 +12,10 @@
 #      which runs INSIDE the honeybot container on every boot.
 #   3. Docker + docker compose installed, daemon running
 #   4. git clean on main at latest origin/main
-#   5. ACM cert for *.honeybot.honeymanenterprises.com issued and the
-#      instance IAM role permitted to fetch it (nginx pulls it at start).
+#   5. Port 80 reachable from the public internet on the EC2's EIP so
+#      Let's Encrypt's HTTP-01 validators can hit
+#      /.well-known/acme-challenge/<token>. No AWS cert, no IAM cert
+#      permissions required — LE is entirely out-of-band of AWS.
 #
 # What it does:
 #   1. `docker compose build` new service images (nginx, honeybot, ES, Neo4j)
@@ -23,13 +25,16 @@
 #      1Password items via seed-vault.sh before varlock resolves the schema.
 #   5. Waits for health, reports status
 #
-# NOTE on certs: we no longer run certbot. TLS certs come from AWS ACM,
-# pulled into the nginx image at container start (see ./nginx/Dockerfile).
-# Route53 DNS-01 flows are gone.
+# NOTE on certs: we no longer run certbot. TLS certs are issued + renewed
+# in-process by lua-resty-acme against Let's Encrypt (HTTP-01 challenge)
+# — see ./nginx/Dockerfile + ./nginx/nginx.conf. No certbot binary, no
+# sidecar, no cron, no Route53 DNS-01. First HTTPS handshake for each
+# whitelisted domain triggers issuance; renewals fire 30d before expiry.
 #
-# NOTE on crons: no host-level crons. Any recurring work (Route53 refresh,
-# cert rotation, etc.) runs inside a container — either the main honeybot
-# process (via Hermes' cron support) or a dedicated sidecar container.
+# NOTE on crons: no host-level crons. Route53 IP refresh is not needed
+# (the EC2 has an Elastic IP). Any recurring work runs inside a container
+# — either the main honeybot process (via Hermes' cron support) or a
+# dedicated sidecar container.
 #
 # Abort semantics: any step failure halts the script. Re-running after
 # fixing the cause picks up where it left off (each step is idempotent).
@@ -114,11 +119,13 @@ else
   echo "  nginx:         FAIL (curl http://127.0.0.1/healthz)"
 fi
 
-# HTTPS should serve with the ACM cert now.
-if curl -fsS https://honeybot.honeymanenterprises.com/healthz >/dev/null 2>&1; then
+# HTTPS should serve with a Let's Encrypt cert. First request per domain
+# may stall 2-5s while lua-resty-acme completes HTTP-01 issuance against
+# LE; retry with -m 30 so the first call doesn't false-negative.
+if curl -fsS -m 30 https://honeybot.honeymanenterprises.com/healthz >/dev/null 2>&1; then
   echo "  https (apex):  OK"
 else
-  echo "  https (apex):  FAIL — check DNS propagation + nginx/ACM wiring"
+  echo "  https (apex):  FAIL — check DNS, SG :80 inbound, nginx logs for ACME"
 fi
 
 # ES — from inside the honeynet network; exec into a sidecar alpine.
@@ -150,6 +157,7 @@ echo "Next steps:"
 echo "  - Populate any empty @required 1Password items (Anthropic, Slack,"
 echo "    Mem0, AWS) via the 1Password web UI. The honeybot container will"
 echo "    fail closed until they're filled."
-echo "  - If a recurring Route53 refresh is needed, implement it as a"
-echo "    Hermes cron inside the honeybot container (NOT a host cron)."
+echo "  - On first HTTPS hit per domain, lua-resty-acme will issue a cert"
+echo "    against Let's Encrypt (2-5s stall). Renewals happen in-process"
+echo "    30d before expiry; no cron needed."
 echo "  - Proceed to Phase 2 (Hermes webhook platform + Retell wiring)."

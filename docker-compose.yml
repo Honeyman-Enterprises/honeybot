@@ -204,10 +204,19 @@ services:
   # ---------------------------------------------------------------------
   # Listens on 80/443 on the host.
   #
-  # Cert source: AWS ACM (replaces the previous certbot + Route53 DNS-01
-  # stack). ACM cert material is pulled into the nginx image at build
-  # time (or fetched at container start via a small hook/lua snippet —
-  # wiring lives in ./nginx). Do NOT reintroduce certbot volumes here.
+  # Cert source: Let's Encrypt, issued + renewed in-process by
+  # lua-resty-acme (HTTP-01 challenge). No certbot binary, no sidecar,
+  # no cron. The base image is OpenResty (nginx + LuaJIT); the autossl
+  # config lives in nginx/nginx.conf init_by_lua_block.
+  #
+  # Port 80 MUST be reachable from the public internet for HTTP-01
+  # validation. The EIP + Route53 A records handle that. If SG rules
+  # are tightened and block LE validators, issuance fails and nginx
+  # keeps serving the last cached cert from acme-storage until expiry.
+  #
+  # Do NOT reintroduce certbot volumes, /etc/letsencrypt/* paths, or
+  # AWS ACM cert-export logic here — ACM public certs can't be exported
+  # and Private CA is ~$400/mo, so neither is viable for this topology.
   #
   # Routes:
   #   hooks.honeybot.honeymanenterprises.com/webhooks/* → honeybot:8644
@@ -226,6 +235,23 @@ services:
     ports:
       - "80:80"
       - "443:443"
+
+    environment:
+      # Contact email on the ACME account. LE uses this only for
+      # expiry / policy-change notifications — not a secret.
+      ACME_ACCOUNT_EMAIL: ${ACME_ACCOUNT_EMAIL:-ops@honeymanenterprises.com}
+      # Set to "1" to issue against LE staging (untrusted certs, much
+      # higher rate limits). Useful for smoke-testing changes to the
+      # autossl config without burning prod issuance quota. Unset / 0
+      # for production.
+      ACME_STAGING: ${ACME_STAGING:-0}
+
+    volumes:
+      # Persists issued certs + ACME account keys across container
+      # restarts. A fresh volume forces re-issuance on first HTTPS
+      # request per whitelisted domain — fine, LE prod limits are 50
+      # certs/week/registered-domain which we're nowhere near.
+      - acme-storage:/etc/openresty/acme-storage
 
     mem_limit: 128m
     memswap_limit: 128m
@@ -369,6 +395,10 @@ volumes:
   elasticsearch-data:
   neo4j-data:
   neo4j-logs:
+  # Issued TLS certs + ACME account keys for lua-resty-acme. Survives
+  # container restarts; losing it forces LE re-issuance on next
+  # handshake per whitelisted domain.
+  acme-storage:
 
 networks:
   honeynet:

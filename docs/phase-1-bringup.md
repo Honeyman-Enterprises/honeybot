@@ -4,10 +4,12 @@ This phase takes the scaffolding from Phase 0 and actually lights it up
 on the EC2. After Phase 1, the following are true:
 
 - Route53 records for `honeybot.honeymanenterprises.com`,
-  `hooks.honeybot.*`, and the wildcard all point at this EC2.
-- The nginx container is terminating TLS on 443 using an **AWS ACM**
-  cert pulled in at container start (no Let's Encrypt, no certbot, no
-  Route53 DNS-01 flow).
+  `hooks.honeybot.*`, and the wildcard all point at the EC2's Elastic IP.
+- The nginx container is terminating TLS on 443 with **Let's Encrypt**
+  certs issued + renewed in-process by `lua-resty-acme` over HTTP-01.
+  No certbot binary, no sidecar, no cron, no DNS-01 flow. First
+  handshake per whitelisted domain triggers issuance; renewals happen
+  via a background timer inside the OpenResty worker.
 - nginx is serving `/healthz` on both the apex and `hooks.honeybot.*`.
 - Elasticsearch 8.15 is up with auth, internal-only.
 - Neo4j 5.24 is up with auth, internal-only.
@@ -27,10 +29,17 @@ on the EC2. After Phase 1, the following are true:
    real values: `Anthropic API`, `Mem0`, `Slack Bot`, and `AWS`. (The
    seeder creates them as empty placeholders; varlock fails the bot
    closed until they're populated.)
-5. ACM cert issued for `honeybot.honeymanenterprises.com` (with the
-   `*.honeybot.honeymanenterprises.com` SAN), in the same region as the
-   EC2. The instance's IAM role needs `acm:ExportCertificate` for that
-   cert ARN; wiring is in `./nginx/Dockerfile`.
+5. Port 80 reachable from the public internet on the EC2's Elastic IP.
+   Let's Encrypt's HTTP-01 validators need to GET
+   `http://<whitelisted-domain>/.well-known/acme-challenge/<token>`;
+   the compose `nginx` service publishes 80 and the port-80 vhost
+   serves challenge responses from Lua. If the Security Group blocks
+   inbound :80, issuance will silently fail and nginx will keep
+   serving the self-signed bootstrap cert. No AWS cert or IAM role
+   permissions are required — LE is entirely out-of-band of AWS.
+6. (Optional) `ACME_ACCOUNT_EMAIL` overridden in the environment if you
+   want LE expiry notices to go somewhere other than the default
+   `ops@honeymanenterprises.com`.
 
 ## Run
 
@@ -65,10 +74,12 @@ The script is idempotent — if it fails mid-way, fix the cause and re-run.
 
 ## Post-run
 
-**No host-level crons.** If a recurring job is needed (Route53 IP
-refresh after EC2 stop/start, ACM cert refresh, etc.), implement it as
-a Hermes cron inside the `honeybot` container or as a dedicated sidecar
-container. Never as a host crontab entry.
+**No host-level crons.** Route53 IP refresh is no longer needed (the EC2
+has an Elastic IP — it survives stop/start). Cert renewal happens
+in-process via `lua-resty-acme`'s background timer, 30 days before
+expiry. If a recurring job is ever needed, implement it as a Hermes
+cron inside the `honeybot` container or as a dedicated sidecar
+container — never as a host crontab entry.
 
 Tag the EBS data volume so the DLM policy actually snapshots it:
 
@@ -93,13 +104,17 @@ From anywhere on the internet:
 
 ```bash
 curl -v https://honeybot.honeymanenterprises.com/healthz
-# Expect: 200, body "ok", valid ACM-issued cert
+# Expect: 200, body "ok", valid Let's Encrypt cert (first request may
+# stall 2-5s while lua-resty-acme completes HTTP-01 issuance)
 
 curl -v https://hooks.honeybot.honeymanenterprises.com/healthz
-# Expect: 200, body "ok", same cert
+# Expect: 200, body "ok", separate LE cert (one per whitelisted SNI)
 
 curl -v https://anything.honeybot.honeymanenterprises.com/healthz
-# Expect: 404 (vhost not configured) but valid cert — proves wildcard
+# Expect: TLS handshake completes with the bootstrap self-signed cert
+# (CN=bootstrap.invalid) because `anything.*` is NOT in the autossl
+# whitelist — lua-resty-acme refuses to issue for unlisted SNIs. This
+# is the safety rail against attackers pointing their own domain at us.
 ```
 
 Inside the container network (from the honeybot container):
@@ -118,7 +133,7 @@ nc -zv neo4j 7687
 |----------|---------|
 | Route53 hosted zone | ~$0.50 (already paid) |
 | Route53 queries | <$0.01 at expected volume |
-| ACM public cert | $0 (free for use on AWS-integrated services) |
+| Let's Encrypt certs | $0 (free, rate limit: 50 certs/week/domain) |
 | EBS snapshots (7 × 20GB delta avg) | ~$0.70 |
 | Everything else | $0 |
 

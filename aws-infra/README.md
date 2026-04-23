@@ -5,9 +5,13 @@ Each script is idempotent — running it twice leaves the same end state as
 running it once. No state file. Uses the bot-level AWS creds from
 `op://Honeybot/AWS/*` (resolved via varlock).
 
-TLS certs are issued and renewed by **AWS ACM**, not certbot. There is
-no dedicated IAM user, no Route53 DNS-01 flow, and no `/etc/letsencrypt`
-volume anywhere in this repo.
+TLS certs are issued and renewed in-process by **`lua-resty-acme`**
+against Let's Encrypt (HTTP-01 challenge) inside the nginx/OpenResty
+container — see `../nginx/`. No certbot binary, no sidecar, no cron,
+no Route53 DNS-01 flow, no `/etc/letsencrypt` volume, and no AWS ACM
+wiring (public ACM certs can't be exported anyway, and Private CA is
+~$400/mo — neither fits this topology). The scripts here cover only
+Route53 A/CNAME records and EBS snapshot lifecycle.
 
 ## Contents
 
@@ -30,11 +34,13 @@ varlock run -- ./aws-infra/ebs-dlm-snapshot-policy.sh
 
 ## Re-running after IP change
 
-EC2 without an Elastic IP will get a new public IP on stop/start.
-Running `route53-upsert.sh` again is idempotent and will update the A
-record to the new IP.
+The EC2 has an **Elastic IP**, so the public IP is stable across
+stop/start and Route53 records normally don't need to be touched after
+the initial upsert. If the EIP is ever replaced, re-running
+`route53-upsert.sh` is idempotent and will update the A record to the
+new IP.
 
-If a recurring refresh is needed, it MUST run inside a container (either
-as a Hermes cron in the honeybot container or as a dedicated sidecar) —
-not as a host-level crontab entry. See `docs/phase-1-bringup.md` for
-context.
+If a recurring refresh is ever needed, it MUST run inside a container
+(either as a Hermes cron in the honeybot container or as a dedicated
+sidecar) — not as a host-level crontab entry. See
+`docs/phase-1-bringup.md` for context.

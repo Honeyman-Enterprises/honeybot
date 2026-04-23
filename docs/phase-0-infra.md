@@ -12,9 +12,9 @@ sidecar keep working unchanged.
 │                              EC2                                      │
 │                                                                       │
 │   ┌───────────────┐                                                   │
-│   │ nginx :80,443 │  TLS certs from AWS ACM (pulled at container     │
-│   │ (TLS term +   │  start via instance IAM role — no certbot).      │
-│   │  reverse prx) │                                                   │
+│   │ nginx :80,443 │  OpenResty + lua-resty-acme. TLS certs from      │
+│   │ (TLS term +   │  Let's Encrypt, issued + renewed in-process via  │
+│   │  reverse prx) │  HTTP-01 (no certbot, no sidecar, no cron).      │
 │   └──────┬────────┘                                                   │
 │          │ honeynet                                                   │
 │   ┌──────▼────────┐   ┌───────────────┐   ┌───────────────┐          │
@@ -42,7 +42,10 @@ sidecar keep working unchanged.
   with values ES + Neo4j need). Exits 0; the other services gate on it
   via `depends_on: condition: service_completed_successfully`.
 - `nginx` — TLS termination, reverse proxy. Listens 80/443 on host.
-  Cert material comes from AWS ACM; wiring in `./nginx/Dockerfile`.
+  Base image is OpenResty (nginx + LuaJIT); `lua-resty-acme` runs
+  inside the worker and issues/renews Let's Encrypt certs via HTTP-01.
+  Persistent `acme-storage` volume holds issued certs + ACME account
+  keys. See `./nginx/Dockerfile` + `./nginx/nginx.conf`.
 - `elasticsearch` — single-node, security enabled, internal network only.
   Consumes `ELASTIC_PASSWORD` from `.env.runtime` via `env_file:`.
 - `neo4j` — community edition, auth enabled, internal network only.
@@ -100,7 +103,8 @@ The seeded items that matter for Phase 1 bring-up:
 
 ### What is NOT in this PR (future phases)
 
-- ACM cert issuance + IAM role wiring for nginx to pull it (Phase 1).
+- First LE cert issuance (happens automatically on first HTTPS handshake
+  for each whitelisted domain during Phase 1 bring-up).
 - Hermes webhook platform enablement (Phase 2).
 - Retell wiring (Phase 2).
 - MCP server implementations (Phase 4 & 5).
@@ -130,5 +134,6 @@ The seeded items that matter for Phase 1 bring-up:
    until these are populated.
 4. Tail logs to confirm: `docker compose logs -f honeybot`.
 
-Cert wiring (ACM → nginx) happens during Phase 1 bring-up; see
-`docs/phase-1-bringup.md`.
+First cert issuance (Let's Encrypt → nginx, via lua-resty-acme HTTP-01)
+happens automatically on first HTTPS handshake per whitelisted domain
+during Phase 1 bring-up; see `docs/phase-1-bringup.md`.

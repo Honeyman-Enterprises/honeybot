@@ -1,29 +1,82 @@
 # syntax=docker/dockerfile:1.7
 #
-# nginx — TLS termination + reverse proxy for Honeybot public webhook traffic.
+# nginx — OpenResty (nginx + LuaJIT + lua-nginx-module) with in-process
+# Let's Encrypt issuance + renewal via lua-resty-acme.
 #
-# Why not plain nginx:alpine? We bake in the conf files at build time so the
-# image is self-contained and reproducible from the repo — no runtime volume
-# mounts for config, no drift between dev/prod. Certs live on a named volume
-# (`certbot-etc`) shared with the certbot service; that's the only stateful
-# piece.
+# Why OpenResty + lua-resty-acme instead of vanilla nginx + certbot,
+# or nginx pulling AWS ACM cert material at start?
+#
+#   - Public ACM certs cannot be exported from AWS (private key never
+#     leaves ACM). Private CA certs can, but cost ~$400/mo per CA.
+#   - EIP routes directly to this EC2 — there's no ALB/CloudFront in
+#     front doing TLS termination with an ACM handle.
+#   - certbot requires a separate binary + crontab / sidecar for
+#     renewal. We've explicitly ruled out host crons.
+#   - lua-resty-acme runs entirely inside the nginx worker: first
+#     handshake for a whitelisted domain triggers HTTP-01 issuance,
+#     renewal is a background timer. Zero host-side tooling.
+#
+# TLS certs + ACME account state persist on the `acme-storage` named
+# volume (mounted at /etc/openresty/acme-storage). A fresh volume
+# triggers re-issuance on first HTTPS request per domain; cached
+# certs survive container restarts.
+#
+# HTTP-01 challenge requires port 80 reachable from the public
+# internet. The EIP + Route53 A records handle that (see
+# aws-infra/route53-upsert.sh).
+#
+# Bootstrap cert: a self-signed pair is baked into the image so the
+# `ssl_certificate` / `ssl_certificate_key` directives have files to
+# open at nginx config load. It is never served to real clients for
+# whitelisted domains — ssl_certificate_by_lua_block replaces it
+# mid-handshake. It's only there so nginx can pass `-t` and start up.
 #
 # Listens on:
-#   80/tcp  → ACME HTTP-01 challenge fallback + redirect to 443
+#   80/tcp  → ACME challenge + /healthz + redirect to 443
 #   443/tcp → TLS-terminated reverse proxy
 #
-# Upstream services are reached over the `honeynet` docker network by
-# service name (e.g. `honeybot:8080`, `mcp-mercury:8000`).
+# Do NOT reintroduce certbot volumes, /etc/letsencrypt/* paths, AWS
+# ACM cert-export logic, or Route53 DNS-01 flows here.
 
-FROM nginx:1.27-alpine
+FROM openresty/openresty:1.25.3.2-2-alpine-fat
 
-# Drop the default server block; we supply our own via conf.d.
+# --- lua-resty-acme + transitive deps ---------------------------------
+# `-fat` variant includes luarocks + the native toolchain needed to
+# build lua-resty-openssl. Install git for luarocks fetch, then drop it
+# after install to keep the image slim.
+RUN apk add --no-cache git openssl \
+ && luarocks install lua-resty-acme \
+ && apk del git
+
+# --- Bootstrap self-signed cert ---------------------------------------
+# Fallback pair referenced by the ssl_certificate / ssl_certificate_key
+# directives so nginx can start before any real cert has been issued.
+# Issued to `bootstrap.invalid` so it's visually obvious in browser
+# error pages if it ever does get served (it shouldn't, because SNI
+# for whitelisted hosts goes through ssl_certificate_by_lua_block).
+RUN mkdir -p /etc/nginx/ssl \
+ && openssl req -x509 -nodes -newkey rsa:2048 -days 3650 \
+      -subj "/CN=bootstrap.invalid" \
+      -keyout /etc/nginx/ssl/bootstrap.key \
+      -out    /etc/nginx/ssl/bootstrap.crt \
+ && chmod 600 /etc/nginx/ssl/bootstrap.key
+
+# --- ACME storage dir -------------------------------------------------
+# The compose `acme-storage` named volume mounts here. Ownership is
+# set so the OpenResty workers (run as `nobody`) can write issued
+# certs + account keys. Mode 700 — nothing in here should be world-
+# readable.
+RUN mkdir -p /etc/openresty/acme-storage \
+ && chown nobody:nobody /etc/openresty/acme-storage \
+ && chmod 700 /etc/openresty/acme-storage
+
+# Drop the upstream default server block; we supply our own via conf.d.
 RUN rm -f /etc/nginx/conf.d/default.conf
 
 COPY nginx.conf        /etc/nginx/nginx.conf
 COPY conf.d/           /etc/nginx/conf.d/
 
-# Health check: nginx must be serving on 80 (HTTP-01 ACME path).
+# Health check: /healthz on port 80, always unconditionally 200.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -qO- http://127.0.0.1/healthz || exit 1
 

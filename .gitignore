@@ -6,6 +6,8 @@
 secrets/
 op.env
 *.op.env
+.env.runtime
+*.env.runtime
 
 # Agent runtime data (memory, FTS, skill state)
 .hermes/

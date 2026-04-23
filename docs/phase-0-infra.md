@@ -11,11 +11,11 @@ sidecar keep working unchanged.
 ┌──────────────────────────────────────────────────────────────────────┐
 │                              EC2                                      │
 │                                                                       │
-│   ┌───────────────┐   ┌───────────────┐                              │
-│   │ nginx :80,443 │◄──┤   certbot     │                              │
-│   │ (TLS term +   │   │  (LE wildcard │                              │
-│   │  reverse prx) │   │   via R53)    │                              │
-│   └──────┬────────┘   └───────────────┘                              │
+│   ┌───────────────┐                                                   │
+│   │ nginx :80,443 │  OpenResty + lua-resty-acme. TLS certs from      │
+│   │ (TLS term +   │  Let's Encrypt, issued + renewed in-process via  │
+│   │  reverse prx) │  HTTP-01 (no certbot, no sidecar, no cron).      │
+│   └──────┬────────┘                                                   │
 │          │ honeynet                                                   │
 │   ┌──────▼────────┐   ┌───────────────┐   ┌───────────────┐          │
 │   │   honeybot    │   │ elasticsearch │   │     neo4j     │          │
@@ -36,46 +36,75 @@ sidecar keep working unchanged.
 
 ### New services (docker-compose.yml)
 
+- `secrets-init` — one-shot. Runs the honeybot image with an overridden
+  entrypoint that invokes `seed-vault.sh` (creates any missing 1Password
+  items) + `emit-runtime-env.sh` (writes `/repo/.env.runtime` on the host
+  with values ES + Neo4j need). Exits 0; the other services gate on it
+  via `depends_on: condition: service_completed_successfully`.
 - `nginx` — TLS termination, reverse proxy. Listens 80/443 on host.
-- `certbot` — LE wildcard cert via Route53 DNS-01, auto-renewal loop.
+  Base image is OpenResty (nginx + LuaJIT); `lua-resty-acme` runs
+  inside the worker and issues/renews Let's Encrypt certs via HTTP-01.
+  Persistent `acme-storage` volume holds issued certs + ACME account
+  keys. See `./nginx/Dockerfile` + `./nginx/nginx.conf`.
 - `elasticsearch` — single-node, security enabled, internal network only.
+  Consumes `ELASTIC_PASSWORD` from `.env.runtime` via `env_file:`.
 - `neo4j` — community edition, auth enabled, internal network only.
+  Consumes `NEO4J_AUTH` from `.env.runtime` via `env_file:`.
+
+**Why `secrets-init` exists:** ES and Neo4j are upstream images that
+don't know how to resolve `op://` refs. Compose's `env_file:` directive
+needs a plain key=value file on the host. `secrets-init` is the
+chicken-and-egg bridge: it runs first, reads from 1Password using the
+service account token, and writes the host file those containers need.
+The file is regenerated on every `docker compose up`, so rotating a
+value in 1Password + re-running is the rotation workflow.
 
 ### New directories
 
 - `nginx/` — Dockerfile + nginx.conf + conf.d/ with vhosts for
   `honeybot.honeymanenterprises.com` and `hooks.honeybot...`.
-- `certbot/` — Dockerfile + entrypoint.sh (issue + renew loop) + renew.sh (deploy hook).
-- `aws-infra/` — idempotent bash scripts for IAM (certbot), Route53 records, EBS DLM policy.
+- `aws-infra/` — idempotent bash scripts for Route53 records + EBS DLM policy.
 - `mcp/` — stub READMEs for Mercury, image-ingest, proxy-memory MCPs (Phase 5 + 8).
 
-### New vault items (to be populated in 1Password before Phase 1)
+### Vault items
 
-| Item                        | Fields                                              |
-|-----------------------------|-----------------------------------------------------|
-| `Honeybot/Certbot AWS`      | access_key_id, secret_access_key, default_region    |
-| `Honeybot/Certbot`          | email                                               |
-| `Honeybot/Elasticsearch`    | password                                            |
-| `Honeybot/Neo4j`            | auth (format: user/password)                        |
-| `Honeybot/Exa`              | api_key (Phase 4)                                   |
-| `Honeybot/Brave Search`     | api_key (Phase 4)                                   |
-| `Honeybot/Tavily`           | api_key (Phase 4)                                   |
-| `Honeybot/Sentry`           | auth_token (Phase 4)                                |
-| `Honeybot/Fal`              | api_key (Phase 5)                                   |
-| `Honeybot/Mercury`          | api_token (Phase 5)                                 |
-| `Honeybot/Honcho`           | api_key, base_url (Phase 8)                         |
+Every item referenced by `.env.schema` is created on demand by
+`scripts/seed-vault.sh`, which runs inside the honeybot container on
+every boot. Empty placeholders for human-filled credentials, auto-
+generated passwords for internal services. No pre-merge 1Password work
+is required beyond creating the `Honeybot` vault and a service account
+token (see root `README.md` §1).
 
-`Honeybot/Telegram` already has `token` filed (Phase 6).
+The seeded items that matter for Phase 1 bring-up:
+
+| Item                        | Fields                                              | How populated          |
+|-----------------------------|-----------------------------------------------------|------------------------|
+| `Honeybot/Elasticsearch`    | password                                            | auto-generated on seed |
+| `Honeybot/Neo4j`            | auth (format: user/password)                        | auto-generated on seed |
+| `Honeybot/AWS`              | access_key_id, secret_access_key, default_region    | human fills in 1P UI   |
+| `Honeybot/Anthropic API`    | api_key                                             | human fills in 1P UI   |
+| `Honeybot/Mem0`             | key                                                 | human fills in 1P UI   |
+| `Honeybot/Slack Bot`        | bot_token, app_token, signing_secret, allowed_user_ids | human fills in 1P UI |
+| `Honeybot/HubSpot`          | personal_access_key                                 | filled via Slack flow  |
+| `Honeybot/Exa`              | api_key (Phase 4)                                   | human fills in 1P UI   |
+| `Honeybot/Brave Search`     | api_key (Phase 4)                                   | human fills in 1P UI   |
+| `Honeybot/Tavily`           | api_key (Phase 4)                                   | human fills in 1P UI   |
+| `Honeybot/Sentry`           | auth_token (Phase 4)                                | human fills in 1P UI   |
+| `Honeybot/Fal`              | api_key (Phase 5)                                   | human fills in 1P UI   |
+| `Honeybot/Mercury`          | api_token (Phase 5)                                 | human fills in 1P UI   |
+| `Honeybot/Honcho`           | api_key, base_url (Phase 8)                         | human fills in 1P UI   |
+| `Honeybot/Telegram`         | token (Phase 6)                                     | human fills in 1P UI   |
 
 ### Updated files
 
-- `.env.schema` — new vault refs for all of the above.
-- `docker-compose.yml` — four new service definitions + six new volumes.
+- `.env.schema` — vault refs for all of the above.
+- `docker-compose.yml` — nginx + ES + neo4j service definitions, three new volumes.
 - `README.md` — pointer to `docs/phase-0-infra.md`.
 
 ### What is NOT in this PR (future phases)
 
-- Actual issuance of the LE cert (Phase 1 — run `aws-infra/bootstrap-certbot-iam.sh` and `route53-upsert.sh` first).
+- First LE cert issuance (happens automatically on first HTTPS handshake
+  for each whitelisted domain during Phase 1 bring-up).
 - Hermes webhook platform enablement (Phase 2).
 - Retell wiring (Phase 2).
 - MCP server implementations (Phase 4 & 5).
@@ -92,16 +121,19 @@ sidecar keep working unchanged.
 
 ## Post-merge, pre-Phase-1
 
-1. Populate the new 1Password items (see table above — at minimum, the
-   Certbot AWS creds via `aws-infra/bootstrap-certbot-iam.sh`, the
-   Certbot email, the Elasticsearch password, and Neo4j auth).
-2. Generate strong random passwords for ES + Neo4j:
-   ```bash
-   openssl rand -base64 32     # good default
-   ```
-3. On EC2: `git pull && docker compose up -d --build nginx certbot elasticsearch neo4j`
-4. Tail logs to confirm: `docker compose logs -f certbot elasticsearch neo4j`
+1. Create the `Honeybot` vault in 1Password and a scoped service account
+   (`honeybot-hermes-ec2`, `read_items` + `write_items`). Drop the token
+   into `./op.env`.
+2. `docker compose up -d --build honeybot` — the container's entrypoint
+   runs `scripts/seed-vault.sh`, creating every vault item referenced
+   by `.env.schema`. Internal secrets (ES, Neo4j) get auto-generated
+   passwords on first creation; external-API items land as empty
+   placeholders for humans to fill.
+3. Fill in the real values for `Anthropic API`, `Mem0`, `Slack Bot`,
+   and `AWS` in the 1Password UI. Varlock fails the container closed
+   until these are populated.
+4. Tail logs to confirm: `docker compose logs -f honeybot`.
 
-Certbot will fail fast if the Route53 creds aren't set — that's fine,
-Phase 1 runs the bootstrap. Until then, it'll restart-loop at the
-"resolved env" stage.
+First cert issuance (Let's Encrypt → nginx, via lua-resty-acme HTTP-01)
+happens automatically on first HTTPS handshake per whitelisted domain
+during Phase 1 bring-up; see `docs/phase-1-bringup.md`.

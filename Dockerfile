@@ -192,6 +192,11 @@ RUN hermes config set memory.provider mem0
 
 COPY --chown=honeybot:honeybot skills/         ./.hermes/skills/
 COPY --chown=honeybot:honeybot .env.schema     ./
+COPY --chmod=0755 --chown=honeybot:honeybot scripts/seed-vault.sh        ./seed-vault.sh
+# emit-runtime-env.sh writes /repo/.env.runtime from the `secrets-init`
+# one-shot compose service (same image, different entrypoint). See
+# docker-compose.yml for wiring.
+COPY --chmod=0755 --chown=honeybot:honeybot scripts/emit-runtime-env.sh  ./emit-runtime-env.sh
 
 # Varlock's autoDetectContextPath() reads process.env.PWD to locate
 # .env.schema. Docker's WORKDIR sets cwd but doesn't export PWD, so we set
@@ -199,8 +204,15 @@ COPY --chown=honeybot:honeybot .env.schema     ./
 ENV PWD=/home/honeybot
 
 # ---- Entrypoint ------------------------------------------------------------
-# Varlock reads .env.schema, resolves op(...) via OP_SERVICE_ACCOUNT_TOKEN,
-# exports validated env to the child, then runs the hermes gateway.
+# On every boot:
+#   1. seed-vault.sh: idempotently ensure every 1Password item referenced
+#      by .env.schema exists in the Honeybot vault. Uses the service
+#      account token; no human signin or vault creation.
+#   2. varlock run: read .env.schema, resolve op(...) via
+#      OP_SERVICE_ACCOUNT_TOKEN, export validated env to the child.
+#   3. hermes gateway: Slack Socket Mode front door.
+# If seed-vault fails (vault unreachable, token bad), the container fails
+# fast before varlock gets a chance to produce confusing error cascades.
 # Use shell form so PWD stays in sync if anything cd's underneath us.
-ENTRYPOINT ["/bin/bash", "-lc", "cd /home/honeybot && exec varlock run -- \"$@\"", "--"]
+ENTRYPOINT ["/bin/bash", "-lc", "cd /home/honeybot && ./seed-vault.sh && exec varlock run -- \"$@\"", "--"]
 CMD ["hermes", "gateway", "run", "--replace"]

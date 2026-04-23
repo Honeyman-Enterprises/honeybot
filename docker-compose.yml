@@ -18,6 +18,65 @@
 name: honeybot
 
 services:
+  # ---------------------------------------------------------------------
+  # secrets-init — one-shot. Seeds 1Password vault items + writes the
+  # compose-level runtime env file that non-Varlock-aware containers
+  # (elasticsearch, neo4j) consume. Runs BEFORE those services start.
+  # ---------------------------------------------------------------------
+  # Uses the same honeybot image, overriding the entrypoint to skip
+  # hermes and just run seed-vault.sh + emit-runtime-env.sh to exit.
+  # depends_on: condition: service_completed_successfully gates the
+  # dependent services on this container exiting 0, so a vault failure
+  # aborts the whole stack startup instead of cascading into confusing
+  # errors downstream.
+  #
+  # Bind mount: `.:/repo` lets this service write /repo/.env.runtime to
+  # the host filesystem. No other service mounts the repo — the file is
+  # consumed by compose itself via env_file on ES and Neo4j.
+  secrets-init:
+    image: honeybot:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: honeybot-secrets-init
+    # One-shot. `restart: no` so a successful exit doesn't loop. On
+    # failure the dependent services refuse to start — that's the
+    # intended fail-closed behavior.
+    restart: "no"
+
+    env_file:
+      - ./op.env
+
+    volumes:
+      - .:/repo
+
+    # Override the honeybot entrypoint. `cd /home/honeybot` because
+    # seed-vault.sh expects to run from there (that's where .env.schema
+    # and the op CLI state live). emit-runtime-env.sh writes its output
+    # to the bind-mounted /repo.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        cd /home/honeybot
+        ./seed-vault.sh
+        ./emit-runtime-env.sh /repo/.env.runtime
+
+    # No network attachment — it only talks to 1Password over the host's
+    # default egress. Putting it on honeynet would invite accidental
+    # coupling to other services.
+    networks: []
+
+    mem_limit: 256m
+    memswap_limit: 256m
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
   honeybot:
     build:
       context: .
@@ -25,6 +84,14 @@ services:
     image: honeybot:local
     container_name: honeybot
     restart: unless-stopped
+
+    # Gate honeybot on secrets-init so the vault is guaranteed to be
+    # seeded before the main container's own entrypoint tries to run
+    # its (idempotent) seeder + varlock. Without this, a first-boot
+    # race could leave varlock resolving against a half-populated vault.
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
 
     env_file:
       # ./op.env in the repo root — same path in dev and prod.
@@ -135,15 +202,28 @@ services:
   # ---------------------------------------------------------------------
   # nginx — TLS termination + reverse proxy for public webhook traffic.
   # ---------------------------------------------------------------------
-  # Listens on 80/443 on the host. TLS certs are issued + renewed by the
-  # certbot service below and shared via the certbot-etc named volume.
+  # Listens on 80/443 on the host.
+  #
+  # Cert source: Let's Encrypt, issued + renewed in-process by
+  # lua-resty-acme (HTTP-01 challenge). No certbot binary, no sidecar,
+  # no cron. The base image is OpenResty (nginx + LuaJIT); the autossl
+  # config lives in nginx/nginx.conf init_by_lua_block.
+  #
+  # Port 80 MUST be reachable from the public internet for HTTP-01
+  # validation. The EIP + Route53 A records handle that. If SG rules
+  # are tightened and block LE validators, issuance fails and nginx
+  # keeps serving the last cached cert from acme-storage until expiry.
+  #
+  # Do NOT reintroduce certbot volumes, /etc/letsencrypt/* paths, or
+  # AWS ACM cert-export logic here — ACM public certs can't be exported
+  # and Private CA is ~$400/mo, so neither is viable for this topology.
   #
   # Routes:
   #   hooks.honeybot.honeymanenterprises.com/webhooks/* → honeybot:8644
   #   (Hermes webhook listener; enabled by Phase 2 config change.)
   #
-  # nginx does NOT need the honeynet network for localhost-only traffic,
-  # but must be on it to resolve upstream service names (honeybot, mcp-*).
+  # nginx must be on honeynet to resolve upstream service names
+  # (honeybot, mcp-*).
   nginx:
     build:
       context: ./nginx
@@ -156,15 +236,22 @@ services:
       - "80:80"
       - "443:443"
 
-    volumes:
-      # Shared with certbot — certbot writes certs here, nginx reads them.
-      - certbot-etc:/etc/letsencrypt:ro
-      # ACME HTTP-01 webroot (kept as a fallback even though DNS-01 is primary).
-      - certbot-www:/var/www/certbot:ro
+    environment:
+      # Contact email on the ACME account. LE uses this only for
+      # expiry / policy-change notifications — not a secret.
+      ACME_ACCOUNT_EMAIL: ${ACME_ACCOUNT_EMAIL:-ops@honeymanenterprises.com}
+      # Set to "1" to issue against LE staging (untrusted certs, much
+      # higher rate limits). Useful for smoke-testing changes to the
+      # autossl config without burning prod issuance quota. Unset / 0
+      # for production.
+      ACME_STAGING: ${ACME_STAGING:-0}
 
-    depends_on:
-      certbot:
-        condition: service_started
+    volumes:
+      # Persists issued certs + ACME account keys across container
+      # restarts. A fresh volume forces re-issuance on first HTTPS
+      # request per whitelisted domain — fine, LE prod limits are 50
+      # certs/week/registered-domain which we're nowhere near.
+      - acme-storage:/etc/openresty/acme-storage
 
     mem_limit: 128m
     memswap_limit: 128m
@@ -176,57 +263,6 @@ services:
         max-file: "3"
 
     networks: [honeynet]
-
-  # ---------------------------------------------------------------------
-  # certbot — Let's Encrypt wildcard cert via Route53 DNS-01.
-  # ---------------------------------------------------------------------
-  # Runs as a long-lived container: issues on first start if missing,
-  # then loops every 12h running `certbot renew`. Certs persist on the
-  # shared `certbot-etc` named volume.
-  #
-  # AWS creds for Route53 are scoped to a dedicated IAM user — see
-  # aws-infra/iam-certbot-policy.json. Stored in 1Password at
-  # op://Honeybot/Certbot AWS/*.
-  certbot:
-    build:
-      context: ./certbot
-      dockerfile: Dockerfile
-    image: honeybot/certbot:local
-    container_name: honeybot-certbot
-    restart: unless-stopped
-
-    env_file:
-      - ./op.env
-
-    environment:
-      # Resolved from 1Password by varlock at container start (see
-      # .env.schema entries under "---- Certbot ----").
-      AWS_ACCESS_KEY_ID:     ${CERTBOT_AWS_ACCESS_KEY_ID:-}
-      AWS_SECRET_ACCESS_KEY: ${CERTBOT_AWS_SECRET_ACCESS_KEY:-}
-      AWS_DEFAULT_REGION:    ${CERTBOT_AWS_REGION:-us-east-1}
-      CERTBOT_EMAIL:           ${CERTBOT_EMAIL:-}
-      CERTBOT_DOMAIN:          ${CERTBOT_DOMAIN:-honeybot.honeymanenterprises.com}
-      CERTBOT_WILDCARD_DOMAIN: ${CERTBOT_WILDCARD_DOMAIN:-*.honeybot.honeymanenterprises.com}
-      # Flip to "1" on first run to hit LE staging and avoid burning prod
-      # rate limits while debugging. Unset/empty for production issuance.
-      CERTBOT_STAGING: ${CERTBOT_STAGING:-}
-
-    # Wrap entrypoint with varlock so AWS creds + CERTBOT_* env come from
-    # 1Password. The image's entrypoint.sh expects them already exported.
-    entrypoint: ["varlock", "run", "--", "/usr/local/bin/entrypoint.sh"]
-
-    volumes:
-      - certbot-etc:/etc/letsencrypt
-      - certbot-www:/var/www/certbot
-
-    mem_limit: 128m
-    memswap_limit: 128m
-
-    logging:
-      driver: json-file
-      options:
-        max-size: "5m"
-        max-file: "3"
 
   # ---------------------------------------------------------------------
   # elasticsearch — internal only. Backing store for image-ingest MCP.
@@ -242,8 +278,24 @@ services:
     container_name: honeybot-elasticsearch
     restart: unless-stopped
 
+    # Wait for secrets-init to write .env.runtime before creating this
+    # container — otherwise compose would error on a missing env_file.
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+
     env_file:
-      - ./op.env
+      # .env.runtime is generated by the secrets-init service on every
+      # `docker compose up`. Contains ELASTIC_PASSWORD and NEO4J_AUTH
+      # read from 1Password via the service account token. Gitignored
+      # and dockerignored; treated exactly like op.env.
+      #
+      # required: false because on a cold host the file doesn't exist
+      # yet at compose-parse time — secrets-init writes it before ES
+      # actually starts (depends_on gate above). Without this flag,
+      # `docker compose config` fails on first run.
+      - path: ./.env.runtime
+        required: false
 
     environment:
       discovery.type: single-node
@@ -251,8 +303,9 @@ services:
       xpack.security.http.ssl.enabled: "false"  # internal network only
       # Heap. t4g.small has 2GB total; cap ES at 512MB to leave room.
       ES_JAVA_OPTS: "-Xms512m -Xmx512m"
-      # Resolved from 1Password by varlock (see .env.schema).
-      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD:-}
+      # ELASTIC_PASSWORD is sourced from .env.runtime above — do NOT
+      # reintroduce a ${ELASTIC_PASSWORD:-} interpolation here. The
+      # host shell never has the value; only 1Password does.
 
     # Never publish ports. Only accessible from containers on honeynet.
     # ports: []
@@ -267,7 +320,11 @@ services:
     memswap_limit: 768m
 
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS -u elastic:${ELASTIC_PASSWORD:-} http://localhost:9200/_cluster/health || exit 1"]
+      # $$ defers expansion to the container's shell at runtime, where
+      # ELASTIC_PASSWORD has been set via env_file (.env.runtime).
+      # Using $ (single) would make compose substitute at parse time
+      # from the host shell, which doesn't have the value.
+      test: ["CMD-SHELL", "curl -fsS -u elastic:$${ELASTIC_PASSWORD} http://localhost:9200/_cluster/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 10
@@ -292,12 +349,23 @@ services:
     container_name: honeybot-neo4j
     restart: unless-stopped
 
+    # Wait for secrets-init to write .env.runtime (see ES service for
+    # the same pattern + rationale).
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+
     env_file:
-      - ./op.env
+      # NEO4J_AUTH is sourced from .env.runtime, generated by
+      # secrets-init. Format is "user/password" — neo4j's convention.
+      # required: false tolerates a cold-host first run (see ES service).
+      - path: ./.env.runtime
+        required: false
 
     environment:
-      # Resolved from 1Password. NEO4J_AUTH format is "user/password".
-      NEO4J_AUTH: ${NEO4J_AUTH:-}
+      # NEO4J_AUTH is provided via env_file above — do NOT reintroduce
+      # a ${NEO4J_AUTH:-} interpolation here. Host shell never has it.
+      #
       # Heap + pagecache tuned for t4g.small alongside ES.
       NEO4J_server_memory_heap_initial__size: "256m"
       NEO4J_server_memory_heap_max__size:     "256m"
@@ -324,11 +392,13 @@ services:
 volumes:
   honeybot-data:
   honeybot-workspace:
-  certbot-etc:
-  certbot-www:
   elasticsearch-data:
   neo4j-data:
   neo4j-logs:
+  # Issued TLS certs + ACME account keys for lua-resty-acme. Survives
+  # container restarts; losing it forces LE re-issuance on next
+  # handshake per whitelisted domain.
+  acme-storage:
 
 networks:
   honeynet:

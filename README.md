@@ -8,7 +8,7 @@ Michelle. Talks to Claude, installs CLIs on demand, starts with HubSpot.
 - **Secrets:** 1Password service account + [Varlock](https://github.com/dmno-dev/varlock).
 - **Runtime:** Docker (identical image for laptop and EC2).
 - **Host:** EC2 `t4g.small` (ARM / Graviton).
-- **Public traffic:** nginx + Let's Encrypt wildcard cert (since Phase 0). See [`docs/phase-0-infra.md`](docs/phase-0-infra.md).
+- **Public traffic:** OpenResty (nginx + LuaJIT), TLS terminated with Let's Encrypt certs issued + renewed in-process via [`lua-resty-acme`](https://github.com/fffonion/lua-resty-acme) (HTTP-01 challenge). No certbot, no sidecar, no cron. See [`docs/phase-0-infra.md`](docs/phase-0-infra.md).
 - **Backing stores (Phase 0):** Elasticsearch + Neo4j, internal-only containers on the `honeynet` network. No ports published.
 
 See [`async-wandering-marshmallow.md` plan](../..//.claude/plans/async-wandering-marshmallow.md)
@@ -28,16 +28,9 @@ git config core.hooksPath .githooks
 
 ### 1. 1Password vault + service account
 
-```bash
-eval $(op signin)                # sign in as your human user
-./scripts/op-bootstrap.sh        # creates "Honeybot" vault + seed items
-```
+One-time tasks in the 1Password web UI (no local `op signin` required):
 
-Then in the 1Password web UI:
-
-1. Fill in real values for `Anthropic API / api_key`, `Mem0 / key` (get one
-   at <https://app.mem0.ai>), and the `Slack Bot` fields (`bot_token`,
-   `app_token`, `signing_secret`, `allowed_user_ids`).
+1. **Create a vault** named `Honeybot`.
 2. **Developer → Directory → Infrastructure Secrets Management → Create a
    Service Account** named `honeybot-hermes-ec2`. Scope: `Honeybot` vault
    only, permissions `read_items` + `write_items`.
@@ -48,8 +41,26 @@ Then in the 1Password web UI:
    echo "OP_SERVICE_ACCOUNT_TOKEN=ops_..." > op.env && chmod 600 op.env
    ```
 
-Leave the `HubSpot / personal_access_key` field empty — the HubSpot skill
-fills it at runtime when Michelle pastes her PAK in Slack.
+That's it. On every container boot, `scripts/seed-vault.sh` (baked into the
+image and invoked by the entrypoint) uses the service account token to
+idempotently create any missing items in the `Honeybot` vault — empty
+placeholders for human-filled credentials (Anthropic, Slack, Mem0, AWS,
+HubSpot) and auto-generated passwords for internal services (Elasticsearch,
+Neo4j). There is no host-side bootstrap to run and no human 1Password
+signin anywhere in the flow.
+
+After first boot, fill in the real values in the 1Password UI for:
+
+- `Anthropic API / api_key`
+- `Mem0 / key` (get one at <https://app.mem0.ai>)
+- `Slack Bot` → `bot_token`, `app_token`, `signing_secret`, `allowed_user_ids`
+- `AWS` → `access_key_id`, `secret_access_key` (region defaults to `us-east-1`)
+
+Varlock fails the container closed until each `@required` item has a real
+value, so the bot refuses to start with missing credentials by design.
+
+Leave `HubSpot / personal_access_key` empty — the HubSpot skill fills it
+at runtime when Michelle pastes her PAK in Slack.
 
 ### 2. Slack app
 
@@ -148,7 +159,7 @@ honeybot/
 │   ├── _lib/                # gh-app-token.sh, creds.sh (shared helpers)
 │   ├── honeybot-dev/        # self-edit-and-PR skill
 │   └── hubspot/             # v1 install + auth skill
-├── scripts/                 # op-bootstrap.sh, pull-and-restart.sh, deploy.sh
+├── scripts/                 # seed-vault.sh (container-boot), pull-and-restart.sh, deploy.sh
 ├── docs/                    # github-app-setup.md, runbooks
 └── .githooks/pre-commit     # secret-leak guard
 ```

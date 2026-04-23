@@ -6,25 +6,35 @@
 #
 # Prereqs (fail fast if missing):
 #   1. PR #3 (Phase 0 scaffold) merged to main
-#   2. 1Password items populated:
-#      - Honeybot/Certbot        (email)
-#      - Honeybot/Elasticsearch  (password)
-#      - Honeybot/Neo4j          (auth, format "neo4j/<password>")
-#   3. Certbot AWS IAM user created via bootstrap-certbot-iam.sh
-#      and its creds filed at Honeybot/Certbot AWS/*
-#   4. op.env present at repo root with OP_SERVICE_ACCOUNT_TOKEN
-#   5. Docker + docker compose installed, daemon running
-#   6. git clean on main at latest origin/main
+#   2. op.env present at repo root with OP_SERVICE_ACCOUNT_TOKEN
+#      (scoped to the Honeybot vault with read_items + write_items).
+#      Item creation in that vault is handled by scripts/seed-vault.sh
+#      which runs INSIDE the honeybot container on every boot.
+#   3. Docker + docker compose installed, daemon running
+#   4. git clean on main at latest origin/main
+#   5. Port 80 reachable from the public internet on the EC2's EIP so
+#      Let's Encrypt's HTTP-01 validators can hit
+#      /.well-known/acme-challenge/<token>. No AWS cert, no IAM cert
+#      permissions required — LE is entirely out-of-band of AWS.
 #
 # What it does:
-#   1. `docker compose build` new services (nginx, certbot, ES, Neo4j)
+#   1. `docker compose build` new service images (nginx, honeybot, ES, Neo4j)
 #   2. Upserts Route53 records pointing at this EC2's public IP
 #   3. Installs the EBS DLM snapshot policy
-#   4. Starts certbot FIRST (in staging mode) to verify cert issuance
-#      against LE staging — avoids burning prod rate limits
-#   5. Stops certbot, flips CERTBOT_STAGING off, re-runs for prod cert
-#   6. Starts nginx, elasticsearch, neo4j
-#   7. Waits for health, reports status
+#   4. Starts the full stack. The honeybot container seeds any missing
+#      1Password items via seed-vault.sh before varlock resolves the schema.
+#   5. Waits for health, reports status
+#
+# NOTE on certs: we no longer run certbot. TLS certs are issued + renewed
+# in-process by lua-resty-acme against Let's Encrypt (HTTP-01 challenge)
+# — see ./nginx/Dockerfile + ./nginx/nginx.conf. No certbot binary, no
+# sidecar, no cron, no Route53 DNS-01. First HTTPS handshake for each
+# whitelisted domain triggers issuance; renewals fire 30d before expiry.
+#
+# NOTE on crons: no host-level crons. Route53 IP refresh is not needed
+# (the EC2 has an Elastic IP). Any recurring work runs inside a container
+# — either the main honeybot process (via Hermes' cron support) or a
+# dedicated sidecar container.
 #
 # Abort semantics: any step failure halts the script. Re-running after
 # fixing the cause picks up where it left off (each step is idempotent).
@@ -48,23 +58,10 @@ fi
 if ! docker compose version >/dev/null 2>&1; then
   echo "ERROR: docker compose plugin not installed" >&2; exit 2
 fi
-if ! command -v varlock >/dev/null 2>&1; then
-  echo "ERROR: varlock not installed on host. Install with: npm i -g varlock" >&2
-  exit 2
-fi
 
-# Validate vault items that MUST exist before we do anything cert-related.
-echo "=== phase-1-bringup: checking 1Password items ==="
-required_vault_paths=(
-  "op://Honeybot/Certbot AWS/access_key_id"
-  "op://Honeybot/Certbot AWS/secret_access_key"
-  "op://Honeybot/Certbot AWS/default_region"
-  "op://Honeybot/Certbot/email"
-  "op://Honeybot/Elasticsearch/password"
-  "op://Honeybot/Neo4j/auth"
-)
-
-# Load OP_SERVICE_ACCOUNT_TOKEN from op.env for the preflight check.
+# Load OP_SERVICE_ACCOUNT_TOKEN from op.env so Route53 / DLM scripts can
+# authenticate against 1Password too. Vault item seeding itself runs inside
+# the honeybot container — we do NOT probe for specific items here.
 # shellcheck disable=SC1091
 set -a; source op.env; set +a
 if [[ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]]; then
@@ -72,32 +69,20 @@ if [[ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]]; then
   exit 2
 fi
 
-missing=0
-for path in "${required_vault_paths[@]}"; do
-  if ! op read "${path}" >/dev/null 2>&1; then
-    echo "  MISSING: ${path}"
-    missing=1
-  else
-    echo "  OK:      ${path}"
-  fi
-done
-if [[ ${missing} -ne 0 ]]; then
-  echo "ERROR: populate the missing 1Password items before continuing." >&2
-  echo "       See docs/phase-0-infra.md for the full list and formats." >&2
-  exit 3
-fi
-
 # ---- Step 1: build new service images --------------------------------------
 echo "=== phase-1-bringup: building images ==="
-docker compose build nginx certbot
+docker compose build nginx honeybot
 
 # ---- Step 2: Route53 upsert -------------------------------------------------
 echo "=== phase-1-bringup: upserting Route53 records ==="
-varlock run -- ./aws-infra/route53-upsert.sh
+# route53-upsert.sh uses varlock internally to resolve AWS creds from 1P.
+# If varlock isn't on the host, the script is responsible for bailing out
+# with a clear message — this orchestrator just invokes it.
+./aws-infra/route53-upsert.sh
 
 # ---- Step 3: EBS DLM policy + volume tag ------------------------------------
 echo "=== phase-1-bringup: ensuring EBS DLM policy ==="
-varlock run -- ./aws-infra/ebs-dlm-snapshot-policy.sh
+./aws-infra/ebs-dlm-snapshot-policy.sh
 
 echo ""
 echo "NOTE: If this is the first bring-up, you still need to TAG the Docker"
@@ -106,63 +91,24 @@ echo "      by ebs-dlm-snapshot-policy.sh above. Re-running this script after"
 echo "      tagging is safe."
 echo ""
 
-# ---- Step 4: certbot in LE STAGING mode ------------------------------------
+# ---- Step 4: bring up the stack --------------------------------------------
+# Bring-up flow (orchestrated by compose via depends_on):
 #
-# Why: LE production has a 5-cert-per-7-days rate limit per registered
-# domain. We verify the full DNS-01 flow against staging first, then
-# flip to prod exactly once.
-echo "=== phase-1-bringup: issuing cert against LE STAGING ==="
-export CERTBOT_STAGING=1
-docker compose up -d --force-recreate certbot
-echo "    waiting up to 180s for staging cert ..."
+#   secrets-init (one-shot) runs FIRST:
+#     - seed-vault.sh creates any missing 1Password items (empty placeholders
+#       for human-filled creds; auto-generated passwords for internal svcs
+#       like Elasticsearch + Neo4j).
+#     - emit-runtime-env.sh writes ./.env.runtime (chmod 600) with the
+#       values ES + Neo4j need, read fresh from 1Password.
+#   secrets-init exits 0 → elasticsearch, neo4j, honeybot start in parallel.
+#
+# Humans still need to fill @required items (Anthropic, Slack, AWS, Mem0)
+# via the 1Password UI. The honeybot container's varlock step fails closed
+# on next boot until they're populated.
+echo "=== phase-1-bringup: starting stack (secrets-init → nginx + honeybot + elasticsearch + neo4j) ==="
+docker compose up -d nginx honeybot elasticsearch neo4j
 
-# Poll the cert volume for a fullchain.pem landing.
-deadline=$(( $(date +%s) + 180 ))
-while (( $(date +%s) < deadline )); do
-  if docker compose exec -T certbot test -f /etc/letsencrypt/live/honeybot.honeymanenterprises.com/fullchain.pem 2>/dev/null; then
-    echo "    staging cert issued."
-    break
-  fi
-  sleep 5
-done
-if ! docker compose exec -T certbot test -f /etc/letsencrypt/live/honeybot.honeymanenterprises.com/fullchain.pem 2>/dev/null; then
-  echo "ERROR: staging cert did not issue within 180s. Check logs:" >&2
-  echo "       docker compose logs certbot --tail=100" >&2
-  exit 4
-fi
-
-# ---- Step 5: wipe staging cert + issue prod cert ----------------------------
-echo "=== phase-1-bringup: issuing PRODUCTION cert ==="
-docker compose stop certbot
-# Remove the staging cert directory so certbot treats this as a fresh issue.
-docker run --rm \
-  -v honeybot_certbot-etc:/etc/letsencrypt \
-  alpine:3.20 \
-  sh -c 'rm -rf /etc/letsencrypt/live /etc/letsencrypt/archive /etc/letsencrypt/renewal'
-unset CERTBOT_STAGING
-# Rewrite the env file for this invocation only. `docker compose` reads env
-# from the shell, so unsetting here is enough.
-docker compose up -d --force-recreate certbot
-echo "    waiting up to 180s for prod cert ..."
-
-deadline=$(( $(date +%s) + 180 ))
-while (( $(date +%s) < deadline )); do
-  if docker compose exec -T certbot test -f /etc/letsencrypt/live/honeybot.honeymanenterprises.com/fullchain.pem 2>/dev/null; then
-    echo "    prod cert issued."
-    break
-  fi
-  sleep 5
-done
-if ! docker compose exec -T certbot test -f /etc/letsencrypt/live/honeybot.honeymanenterprises.com/fullchain.pem 2>/dev/null; then
-  echo "ERROR: prod cert did not issue within 180s. Check logs:" >&2
-  exit 4
-fi
-
-# ---- Step 6: bring up the rest ----------------------------------------------
-echo "=== phase-1-bringup: starting nginx + elasticsearch + neo4j ==="
-docker compose up -d nginx elasticsearch neo4j
-
-# ---- Step 7: healthchecks ---------------------------------------------------
+# ---- Step 5: healthchecks ---------------------------------------------------
 echo "=== phase-1-bringup: waiting for health ==="
 sleep 15
 
@@ -173,16 +119,24 @@ else
   echo "  nginx:         FAIL (curl http://127.0.0.1/healthz)"
 fi
 
-# HTTPS should serve with the prod cert now.
-if curl -fsS https://honeybot.honeymanenterprises.com/healthz >/dev/null 2>&1; then
+# HTTPS should serve with a Let's Encrypt cert. First request per domain
+# may stall 2-5s while lua-resty-acme completes HTTP-01 issuance against
+# LE; retry with -m 30 so the first call doesn't false-negative.
+if curl -fsS -m 30 https://honeybot.honeymanenterprises.com/healthz >/dev/null 2>&1; then
   echo "  https (apex):  OK"
 else
-  echo "  https (apex):  FAIL — check DNS propagation + nginx logs"
+  echo "  https (apex):  FAIL — check DNS, SG :80 inbound, nginx logs for ACME"
 fi
 
 # ES — from inside the honeynet network; exec into a sidecar alpine.
-if docker run --rm --network honeybot_honeynet alpine:3.20 \
-     sh -c "wget -qO- --user=elastic --password=\"$(op read 'op://Honeybot/Elasticsearch/password')\" http://elasticsearch:9200/_cluster/health" | grep -q "status"; then
+# Password is read from 1P via op; the service account token is already in env.
+if docker run --rm --network honeybot_honeynet \
+     -e OP_SERVICE_ACCOUNT_TOKEN="${OP_SERVICE_ACCOUNT_TOKEN}" \
+     1password/op:2 sh -c '
+       pw="$(op read op://Honeybot/Elasticsearch/password)"
+       apk add --no-cache curl >/dev/null
+       curl -fsS -u "elastic:${pw}" http://elasticsearch:9200/_cluster/health
+     ' 2>/dev/null | grep -q "status"; then
   echo "  elasticsearch: OK"
 else
   echo "  elasticsearch: FAIL"
@@ -200,7 +154,10 @@ echo ""
 echo "=== phase-1-bringup: done ==="
 echo ""
 echo "Next steps:"
-echo "  - Install the daily cron for Route53 re-upsert (in case EC2 restarts"
-echo "    and gets a new public IP):"
-echo "      scripts/install-phase-1-crons.sh"
+echo "  - Populate any empty @required 1Password items (Anthropic, Slack,"
+echo "    Mem0, AWS) via the 1Password web UI. The honeybot container will"
+echo "    fail closed until they're filled."
+echo "  - On first HTTPS hit per domain, lua-resty-acme will issue a cert"
+echo "    against Let's Encrypt (2-5s stall). Renewals happen in-process"
+echo "    30d before expiry; no cron needed."
 echo "  - Proceed to Phase 2 (Hermes webhook platform + Retell wiring)."

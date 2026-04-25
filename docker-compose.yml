@@ -50,12 +50,32 @@ services:
     volumes:
       - .:/repo
 
+    # Run as the host's ec2-user UID so emit-runtime-env.sh can write
+    # /repo/.env.runtime. The honeybot image bakes a `honeybot` user at
+    # UID 10001, but /repo is bind-mounted from the host directory owned
+    # by ec2-user (1000:1000) — UID 10001 has no write permission there
+    # and emit-runtime-env.sh fails with "Permission denied".
+    #
+    # See the redeploy service below for the canonical rationale and
+    # the override env vars (HONEYBOT_HOST_UID / HONEYBOT_HOST_GID).
+    user: "${HONEYBOT_HOST_UID:-1000}:${HONEYBOT_HOST_GID:-1000}"
+
+    environment:
+      # The baked-in /home/honeybot is owned by UID 10001 and not
+      # writable by the UID we run as. Anything in this container that
+      # touches $HOME (op CLI cache, aws CLI cache, etc.) must land
+      # somewhere writable. /tmp is always world-writable and the
+      # entrypoint chain doesn't depend on $HOME persistence.
+      HOME: /tmp
+
     # Override the honeybot entrypoint. `cd /home/honeybot` because
     # seed-vault.sh expects to run from there (that's where .env.schema
-    # and the op CLI state live). emit-runtime-env.sh writes its output
-    # to the bind-mounted /repo. ensure-aws-infra.sh runs last and
-    # no-ops on machines where no honeybot-prod-tagged instance exists,
-    # so it's safe to invoke unconditionally on laptops too.
+    # and the op CLI state live). The dir is mode 0755 (default useradd)
+    # so cd-in works for any UID; the COPY'd scripts are 0755 / 0644 so
+    # readable too. emit-runtime-env.sh writes its output to the
+    # bind-mounted /repo. ensure-aws-infra.sh runs last and no-ops on
+    # machines where no honeybot-prod-tagged instance exists, so it's
+    # safe to invoke unconditionally on laptops too.
     entrypoint:
       - /bin/sh
       - -c
@@ -173,17 +193,24 @@ services:
     # ec2-user `git fetch` from the host shell with:
     #   "error: insufficient permission for adding an object to repository"
     #
+    # HONEYBOT_HOST_UID / HONEYBOT_HOST_GID are shared with secrets-init
+    # above — both services bind-mount /repo and need to write to the
+    # host's working tree as the host's owning user. Renaming away from
+    # the previous HONEYBOT_REDEPLOY_* names to reflect the repo-wide
+    # alignment (not just the redeploy sidecar's concern).
+    #
     # group_add attaches the host's docker group so the non-root UID can
     # still read/write /var/run/docker.sock and issue `docker compose`.
+    # This is redeploy-specific — only this service touches the socket.
     #
     # Defaults match Amazon Linux 2023 (ec2-user=1000:1000, docker
     # group=988). Override via shell env when your host differs:
     #
-    #   export HONEYBOT_REDEPLOY_UID=$(id -u ec2-user 2>/dev/null || id -u)
-    #   export HONEYBOT_REDEPLOY_GID=$(id -g ec2-user 2>/dev/null || id -g)
+    #   export HONEYBOT_HOST_UID=$(id -u ec2-user 2>/dev/null || id -u)
+    #   export HONEYBOT_HOST_GID=$(id -g ec2-user 2>/dev/null || id -g)
     #   export HONEYBOT_DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)
     #   docker compose up -d
-    user: "${HONEYBOT_REDEPLOY_UID:-1000}:${HONEYBOT_REDEPLOY_GID:-1000}"
+    user: "${HONEYBOT_HOST_UID:-1000}:${HONEYBOT_HOST_GID:-1000}"
     group_add:
       - "${HONEYBOT_DOCKER_GID:-988}"
 

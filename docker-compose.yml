@@ -60,13 +60,18 @@ services:
     # the override env vars (HONEYBOT_HOST_UID / HONEYBOT_HOST_GID).
     user: "${HONEYBOT_HOST_UID:-1000}:${HONEYBOT_HOST_GID:-1000}"
 
-    environment:
-      # The baked-in /home/honeybot is owned by UID 10001 and not
-      # writable by the UID we run as. Anything in this container that
-      # touches $HOME (op CLI cache, aws CLI cache, etc.) must land
-      # somewhere writable. /tmp is always world-writable and the
-      # entrypoint chain doesn't depend on $HOME persistence.
-      HOME: /tmp
+    # Note on HOME: NOT set in the environment block. The op CLI's
+    # safety check refuses to operate when $HOME isn't a directory owned
+    # by the current UID. Setting HOME=/tmp fails it because /tmp is
+    # root:root mode 1777 — UID 1000 can write there but doesn't own it,
+    # so op errors out:
+    #   Can't continue. We can't safely access "/tmp/.config/op"
+    #   because it's not owned by the current user.
+    # Same shape for the daemon IPC at /tmp/com.agilebits.op.*.
+    #
+    # Instead, the entrypoint mktemps a per-run HOME owned by the
+    # current UID with mode 0700, and points XDG_RUNTIME_DIR at the
+    # same place so op's daemon socket lands under our owned tree.
 
     # Override the honeybot entrypoint. `cd /home/honeybot` because
     # seed-vault.sh expects to run from there (that's where .env.schema
@@ -83,6 +88,14 @@ services:
       - -c
       - |
         set -eu
+        # Per-run HOME owned by current UID (mode 0700 from mktemp -d).
+        # See HOME comment above for why /tmp itself doesn't work.
+        HOME="$(mktemp -d -t honeybot-op.XXXXXX)"
+        export HOME
+        # op CLI honors XDG_RUNTIME_DIR for the daemon socket; without
+        # this it falls back to /tmp/com.agilebits.op.* which is shared
+        # and trips the same ownership check.
+        export XDG_RUNTIME_DIR="$HOME"
         cd /home/honeybot
         ./seed-vault.sh
         ./emit-runtime-env.sh /repo/.env.runtime

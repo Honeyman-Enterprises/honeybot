@@ -70,12 +70,14 @@ services:
 
     # Override the honeybot entrypoint. `cd /home/honeybot` because
     # seed-vault.sh expects to run from there (that's where .env.schema
-    # and the op CLI state live). The dir is mode 0755 (default useradd)
-    # so cd-in works for any UID; the COPY'd scripts are 0755 / 0644 so
-    # readable too. emit-runtime-env.sh writes its output to the
-    # bind-mounted /repo. ensure-aws-infra.sh runs last and no-ops on
-    # machines where no honeybot-prod-tagged instance exists, so it's
-    # safe to invoke unconditionally on laptops too.
+    # and the op CLI state live). The Dockerfile chmods /home/honeybot
+    # to 0755 specifically so this cd works under the host-UID override
+    # above (default `useradd -m` on Debian leaves it 0700, blocking
+    # traversal by anyone other than UID 10001). The COPY'd scripts are
+    # 0755 / 0644 so readable by any UID. emit-runtime-env.sh writes its
+    # output to the bind-mounted /repo. ensure-aws-infra.sh runs last
+    # and no-ops on machines where no honeybot-prod-tagged instance
+    # exists, so it's safe to invoke unconditionally on laptops too.
     entrypoint:
       - /bin/sh
       - -c

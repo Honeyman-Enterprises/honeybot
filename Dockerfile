@@ -172,7 +172,20 @@ RUN curl -fsSL https://downloads.slack-edge.com/slack-cli/install.sh \
  && slack --version | head -n1
 
 # ---- Non-root runtime user -------------------------------------------------
-RUN useradd -m -u 10001 -s /bin/bash honeybot
+# `useradd -m` on Debian (python:3.12-slim base) creates /home/honeybot with
+# mode 0700 owned by 10001:10001. That's fine when the container runs as the
+# baked `honeybot` UID, but the `secrets-init` compose service overrides
+# `user:` to the host's ec2-user UID (1000) so it can write to the bind-
+# mounted /repo. Under that override, UID 1000 can't even `cd /home/honeybot`
+# (no traverse bit for "other"), and the entrypoint dies with:
+#   /bin/sh: cd: can't cd to /home/honeybot
+#
+# chmod 0755 makes the directory world-traversable. The seed/emit scripts
+# inside are already COPY'd with --chmod=0755 (executable for any UID), and
+# the .hermes/ subtree stays 10001-owned; any state the secrets-init
+# entrypoint writes goes to /repo or $HOME=/tmp (set in compose), not here.
+RUN useradd -m -u 10001 -s /bin/bash honeybot \
+ && chmod 0755 /home/honeybot
 USER honeybot
 WORKDIR /home/honeybot
 

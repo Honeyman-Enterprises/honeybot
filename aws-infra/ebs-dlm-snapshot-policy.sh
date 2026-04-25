@@ -103,16 +103,6 @@ else
   echo "    Created policy ${NEW_ID}."
 fi
 
-cat <<EOF
-
-NEXT: tag the Docker data EBS volume so this policy targets it.
-
-  aws ec2 create-tags \\
-    --resources <vol-xxxxxxxx> \\
-    --tags Key=${POLICY_TAG_KEY},Value=${POLICY_TAG_VALUE}
-
-Find the volume ID:
-  aws ec2 describe-volumes \\
-    --filters Name=attachment.instance-id,Values=<your-instance-id> \\
-    --query 'Volumes[].{Id:VolumeId,Size:Size,Device:Attachments[0].Device}'
-EOF
+# Volume tagging (Name=honeybot-docker-data) is handled automatically by
+# scripts/ensure-aws-infra.sh on every secrets-init startup — no manual
+# follow-up step here.

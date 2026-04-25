@@ -22,8 +22,8 @@
 # certs survive container restarts.
 #
 # HTTP-01 challenge requires port 80 reachable from the public
-# internet. The EIP + Route53 A records handle that (see
-# aws-infra/route53-upsert.sh).
+# internet. The EIP + a manually-managed Route53 apex A record handle
+# that.
 #
 # Bootstrap cert: a self-signed pair is baked into the image so the
 # `ssl_certificate` / `ssl_certificate_key` directives have files to

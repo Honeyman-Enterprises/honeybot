@@ -1,43 +1,37 @@
 #!/usr/bin/env bash
-# Phase 1 bring-up orchestrator.
+# Phase 1 bring-up — thin host-side wrapper.
 #
-# Idempotent. Runs all of Phase 1 in order, with preflight checks between
-# steps, on the EC2 host. Safe to re-run.
+# Most of what used to live here moved into the `secrets-init` compose
+# service, which runs as a one-shot on every `docker compose up` and is
+# itself idempotent:
+#   - seed-vault.sh         → idempotent 1Password vault item creation
+#   - emit-runtime-env.sh   → writes ./.env.runtime for ES + Neo4j env_file
+#   - ensure-aws-infra.sh   → idempotent EBS DLM policy + volume tag
+#                             (no-ops on laptops without honeybot-prod tag)
 #
-# Prereqs (fail fast if missing):
-#   1. PR #3 (Phase 0 scaffold) merged to main
-#   2. op.env present at repo root with OP_SERVICE_ACCOUNT_TOKEN
+# This script's job is now narrow: preflight the host, bring up the stack,
+# wait for health. Safe to re-run.
+#
+# Prereqs:
+#   1. op.env at the repo root with OP_SERVICE_ACCOUNT_TOKEN
 #      (scoped to the Honeybot vault with read_items + write_items).
-#      Item creation in that vault is handled by scripts/seed-vault.sh
-#      which runs INSIDE the honeybot container on every boot.
-#   3. Docker + docker compose installed, daemon running
-#   4. git clean on main at latest origin/main
+#   2. Docker + docker compose installed, daemon running.
+#   3. EC2 instance tagged Name=honeybot-prod (or HONEYBOT_INSTANCE_TAG).
+#      Without this tag, ensure-aws-infra.sh skips silently — the stack
+#      still comes up, but DLM snapshots won't target the volume.
+#   4. Route53 apex record (honeybot.honeymanenterprises.com → EIP) created
+#      manually in the AWS console. No automation here.
 #   5. Port 80 reachable from the public internet on the EC2's EIP so
 #      Let's Encrypt's HTTP-01 validators can hit
-#      /.well-known/acme-challenge/<token>. No AWS cert, no IAM cert
-#      permissions required — LE is entirely out-of-band of AWS.
+#      /.well-known/acme-challenge/<token>.
 #
-# What it does:
-#   1. `docker compose build` new service images (nginx, honeybot, ES, Neo4j)
-#   2. Upserts Route53 records pointing at this EC2's public IP
-#   3. Installs the EBS DLM snapshot policy
-#   4. Starts the full stack. The honeybot container seeds any missing
-#      1Password items via seed-vault.sh before varlock resolves the schema.
-#   5. Waits for health, reports status
-#
-# NOTE on certs: we no longer run certbot. TLS certs are issued + renewed
-# in-process by lua-resty-acme against Let's Encrypt (HTTP-01 challenge)
-# — see ./nginx/Dockerfile + ./nginx/nginx.conf. No certbot binary, no
-# sidecar, no cron, no Route53 DNS-01. First HTTPS handshake for each
+# NOTE on certs: TLS certs are issued + renewed in-process by
+# lua-resty-acme against Let's Encrypt (HTTP-01) inside the nginx
+# container. No certbot, no sidecar, no cron. First HTTPS handshake per
 # whitelisted domain triggers issuance; renewals fire 30d before expiry.
 #
-# NOTE on crons: no host-level crons. Route53 IP refresh is not needed
-# (the EC2 has an Elastic IP). Any recurring work runs inside a container
-# — either the main honeybot process (via Hermes' cron support) or a
-# dedicated sidecar container.
-#
-# Abort semantics: any step failure halts the script. Re-running after
-# fixing the cause picks up where it left off (each step is idempotent).
+# NOTE on crons: no host-level crons. Recurring work runs inside a
+# container — Hermes cron in the honeybot container or a dedicated sidecar.
 set -euo pipefail
 
 REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
@@ -59,56 +53,16 @@ if ! docker compose version >/dev/null 2>&1; then
   echo "ERROR: docker compose plugin not installed" >&2; exit 2
 fi
 
-# Load OP_SERVICE_ACCOUNT_TOKEN from op.env so Route53 / DLM scripts can
-# authenticate against 1Password too. Vault item seeding itself runs inside
-# the honeybot container — we do NOT probe for specific items here.
-# shellcheck disable=SC1091
-set -a; source op.env; set +a
-if [[ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]]; then
-  echo "ERROR: OP_SERVICE_ACCOUNT_TOKEN not set from op.env" >&2
-  exit 2
-fi
+# ---- Bring up the stack -----------------------------------------------------
+# Compose orchestrates the order via depends_on: condition: service_completed_successfully:
+#   secrets-init (one-shot) runs FIRST. It seeds 1Password, writes
+#   .env.runtime, and ensures the AWS-side DLM policy + volume tag.
+#   On exit 0, nginx + honeybot + elasticsearch + neo4j start in parallel.
+#   If secrets-init fails, dependent services refuse to start (fail-closed).
+echo "=== phase-1-bringup: docker compose up -d --build ==="
+docker compose up -d --build nginx honeybot elasticsearch neo4j
 
-# ---- Step 1: build new service images --------------------------------------
-echo "=== phase-1-bringup: building images ==="
-docker compose build nginx honeybot
-
-# ---- Step 2: Route53 upsert -------------------------------------------------
-echo "=== phase-1-bringup: upserting Route53 records ==="
-# route53-upsert.sh uses varlock internally to resolve AWS creds from 1P.
-# If varlock isn't on the host, the script is responsible for bailing out
-# with a clear message — this orchestrator just invokes it.
-./aws-infra/route53-upsert.sh
-
-# ---- Step 3: EBS DLM policy + volume tag ------------------------------------
-echo "=== phase-1-bringup: ensuring EBS DLM policy ==="
-./aws-infra/ebs-dlm-snapshot-policy.sh
-
-echo ""
-echo "NOTE: If this is the first bring-up, you still need to TAG the Docker"
-echo "      data volume so the DLM policy targets it. See the command printed"
-echo "      by ebs-dlm-snapshot-policy.sh above. Re-running this script after"
-echo "      tagging is safe."
-echo ""
-
-# ---- Step 4: bring up the stack --------------------------------------------
-# Bring-up flow (orchestrated by compose via depends_on):
-#
-#   secrets-init (one-shot) runs FIRST:
-#     - seed-vault.sh creates any missing 1Password items (empty placeholders
-#       for human-filled creds; auto-generated passwords for internal svcs
-#       like Elasticsearch + Neo4j).
-#     - emit-runtime-env.sh writes ./.env.runtime (chmod 600) with the
-#       values ES + Neo4j need, read fresh from 1Password.
-#   secrets-init exits 0 → elasticsearch, neo4j, honeybot start in parallel.
-#
-# Humans still need to fill @required items (Anthropic, Slack, AWS, Mem0)
-# via the 1Password UI. The honeybot container's varlock step fails closed
-# on next boot until they're populated.
-echo "=== phase-1-bringup: starting stack (secrets-init → nginx + honeybot + elasticsearch + neo4j) ==="
-docker compose up -d nginx honeybot elasticsearch neo4j
-
-# ---- Step 5: healthchecks ---------------------------------------------------
+# ---- Healthchecks -----------------------------------------------------------
 echo "=== phase-1-bringup: waiting for health ==="
 sleep 15
 
@@ -120,16 +74,17 @@ else
 fi
 
 # HTTPS should serve with a Let's Encrypt cert. First request per domain
-# may stall 2-5s while lua-resty-acme completes HTTP-01 issuance against
-# LE; retry with -m 30 so the first call doesn't false-negative.
+# may stall 2-5s while lua-resty-acme completes HTTP-01 issuance; -m 30
+# keeps the first call from false-negativing.
 if curl -fsS -m 30 https://honeybot.honeymanenterprises.com/healthz >/dev/null 2>&1; then
   echo "  https (apex):  OK"
 else
   echo "  https (apex):  FAIL — check DNS, SG :80 inbound, nginx logs for ACME"
 fi
 
-# ES — from inside the honeynet network; exec into a sidecar alpine.
-# Password is read from 1P via op; the service account token is already in env.
+# ES — exec inside the honeynet network. Service account token is already
+# loaded into the secrets-init container's env_file via op.env, so reuse it.
+set -a; source op.env; set +a
 if docker run --rm --network honeybot_honeynet \
      -e OP_SERVICE_ACCOUNT_TOKEN="${OP_SERVICE_ACCOUNT_TOKEN}" \
      1password/op:2 sh -c '
@@ -160,4 +115,6 @@ echo "    fail closed until they're filled."
 echo "  - On first HTTPS hit per domain, lua-resty-acme will issue a cert"
 echo "    against Let's Encrypt (2-5s stall). Renewals happen in-process"
 echo "    30d before expiry; no cron needed."
-echo "  - Proceed to Phase 2 (Hermes webhook platform + Retell wiring)."
+echo "  - secrets-init logs (docker compose logs secrets-init) will show"
+echo "    whether the EBS DLM policy + volume tag were ensured. First DLM"
+echo "    snapshot fires within 24h of the volume being tagged."

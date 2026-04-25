@@ -41,36 +41,35 @@
 FROM openresty/openresty:1.25.3.2-2-alpine-fat
 
 # --- lua-resty-acme + transitive deps ---------------------------------
-# `-fat` variant includes luarocks + the native toolchain needed to
-# build lua-resty-openssl. Install git for luarocks fetch, then drop it
-# after install to keep the image slim.
+# Why opm and not luarocks:
 #
-# Why every rock is pinned (and why bare `luarocks install lua-resty-acme`
-# is broken right now):
-#
-# As of 2025, the LuaRocks public manifests at luarocks.org and the
-# GitHub mirror have grown past Lua 5.1's hard-coded 65536-constants
-# limit per chunk (`MAXARG_Bx`). LuaJIT (which OpenResty embeds) speaks
-# the 5.1 dialect, so loading the manifest fails with:
+# As of 2025, the LuaRocks public manifests have grown past Lua 5.1's
+# hard-coded 65536-constants-per-chunk limit (`MAXARG_Bx`). LuaJIT (what
+# OpenResty embeds) speaks the 5.1 dialect, so any `luarocks install`
+# (even one pinned to a specific name + version) fails on manifest load:
 #
 #   Failed loading manifest for https://luarocks.org:
 #     ...main function has more than 65536 constants
 #   Error: No results matching query were found for Lua 5.1.
 #
-# When you give `luarocks install` an explicit name AND version, it
-# fetches that one rockspec directly from the rocks server and skips the
-# manifest parse entirely. So we pin everything: leaf deps first
-# (no transitive resolution needed), then the top-level rock.
+# Version pinning doesn't help — `luarocks install <name> <version>`
+# still fetches the manifest first to resolve the rockspec URL.
 #
-# To bump versions:
+# opm is OpenResty's purpose-built package manager. It fetches from
+# opm.openresty.org (not luarocks.org), uses its own catalog, and is
+# bundled into the `-fat` image variants. It auto-resolves and installs
+# transitive deps from each package's META.json, so installing the
+# top-level package is enough.
+#
+# To bump versions, pin via `<name>=<version>` if you need to:
 #   - lua-resty-http:    https://github.com/ledgetech/lua-resty-http/tags
 #   - lua-resty-openssl: https://github.com/fffonion/lua-resty-openssl/tags
 #   - lua-resty-acme:    https://github.com/fffonion/lua-resty-acme/tags
-RUN apk add --no-cache git openssl \
- && luarocks install lua-resty-http    0.17.2 \
- && luarocks install lua-resty-openssl 1.7.1 \
- && luarocks install lua-resty-acme    0.16.0 \
- && apk del git
+#
+# `openssl` apk is the CLI used below to mint the bootstrap self-signed
+# pair; not needed by lua-resty-* themselves (they FFI into libssl3).
+RUN apk add --no-cache openssl \
+ && opm get fffonion/lua-resty-acme
 
 # --- Bootstrap self-signed cert ---------------------------------------
 # Fallback pair referenced by the ssl_certificate / ssl_certificate_key

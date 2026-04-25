@@ -44,8 +44,32 @@ FROM openresty/openresty:1.25.3.2-2-alpine-fat
 # `-fat` variant includes luarocks + the native toolchain needed to
 # build lua-resty-openssl. Install git for luarocks fetch, then drop it
 # after install to keep the image slim.
+#
+# Why every rock is pinned (and why bare `luarocks install lua-resty-acme`
+# is broken right now):
+#
+# As of 2025, the LuaRocks public manifests at luarocks.org and the
+# GitHub mirror have grown past Lua 5.1's hard-coded 65536-constants
+# limit per chunk (`MAXARG_Bx`). LuaJIT (which OpenResty embeds) speaks
+# the 5.1 dialect, so loading the manifest fails with:
+#
+#   Failed loading manifest for https://luarocks.org:
+#     ...main function has more than 65536 constants
+#   Error: No results matching query were found for Lua 5.1.
+#
+# When you give `luarocks install` an explicit name AND version, it
+# fetches that one rockspec directly from the rocks server and skips the
+# manifest parse entirely. So we pin everything: leaf deps first
+# (no transitive resolution needed), then the top-level rock.
+#
+# To bump versions:
+#   - lua-resty-http:    https://github.com/ledgetech/lua-resty-http/tags
+#   - lua-resty-openssl: https://github.com/fffonion/lua-resty-openssl/tags
+#   - lua-resty-acme:    https://github.com/fffonion/lua-resty-acme/tags
 RUN apk add --no-cache git openssl \
- && luarocks install lua-resty-acme \
+ && luarocks install lua-resty-http    0.17.2 \
+ && luarocks install lua-resty-openssl 1.7.1 \
+ && luarocks install lua-resty-acme    0.16.0 \
  && apk del git
 
 # --- Bootstrap self-signed cert ---------------------------------------

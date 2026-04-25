@@ -37,8 +37,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # - nodejs/npm: varlock CLI + @hubspot/cli (pre-installed below)
 # - openssl: sign GitHub App JWTs (RS256) in skills/_lib/gh-app-token.sh
 # - jq: parse the installation-token JSON response from the GitHub App flow
+# - gosu: drop privileges from root in the secrets-init entrypoint. The op
+#   CLI has two safety checks (CLI-side $HOME ownership walk + daemon-side
+#   getpwuid lookup) that compose's `user:` directive can't satisfy on a
+#   stock image; secrets-init starts as root, fixes both, then `exec gosu`
+#   to the runtime UID. See scripts/secrets-init-entrypoint.sh.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      curl unzip xz-utils git ca-certificates gnupg openssl jq \
+      curl unzip xz-utils git ca-certificates gnupg openssl jq gosu \
  && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
  && apt-get install -y --no-install-recommends nodejs \
  && rm -rf /var/lib/apt/lists/*
@@ -174,16 +179,19 @@ RUN curl -fsSL https://downloads.slack-edge.com/slack-cli/install.sh \
 # ---- Non-root runtime user -------------------------------------------------
 # `useradd -m` on Debian (python:3.12-slim base) creates /home/honeybot with
 # mode 0700 owned by 10001:10001. That's fine when the container runs as the
-# baked `honeybot` UID, but the `secrets-init` compose service overrides
-# `user:` to the host's ec2-user UID (1000) so it can write to the bind-
-# mounted /repo. Under that override, UID 1000 can't even `cd /home/honeybot`
-# (no traverse bit for "other"), and the entrypoint dies with:
+# baked `honeybot` UID, but the `secrets-init` compose service starts as
+# root and `exec gosu`s to the host's ec2-user UID (1000 by default) so it
+# can write to the bind-mounted /repo. After the gosu drop, UID 1000 needs
+# to `cd /home/honeybot` to find seed-vault.sh / emit-runtime-env.sh /
+# ensure-aws-infra.sh — without the traverse bit for "other", the chain
+# would die with:
 #   /bin/sh: cd: can't cd to /home/honeybot
 #
 # chmod 0755 makes the directory world-traversable. The seed/emit scripts
 # inside are already COPY'd with --chmod=0755 (executable for any UID), and
-# the .hermes/ subtree stays 10001-owned; any state the secrets-init
-# entrypoint writes goes to /repo or $HOME=/tmp (set in compose), not here.
+# the .hermes/ subtree stays 10001-owned. The dropped UID's own $HOME
+# during secrets-init is /home/secrets-init (created at runtime by the
+# entrypoint script), NOT /home/honeybot — nothing op-related lands here.
 RUN useradd -m -u 10001 -s /bin/bash honeybot \
  && chmod 0755 /home/honeybot
 USER honeybot
@@ -216,6 +224,13 @@ COPY --chmod=0755 --chown=honeybot:honeybot scripts/emit-runtime-env.sh  ./emit-
 # honeybot-prod-tagged EC2 instance is found (laptop-safe).
 COPY --chown=honeybot:honeybot aws-infra/                            ./aws-infra/
 COPY --chmod=0755 --chown=honeybot:honeybot scripts/ensure-aws-infra.sh ./ensure-aws-infra.sh
+
+# secrets-init's privilege-drop entrypoint. Lives at /usr/local/bin so it's
+# on the default PATH and outside the honeybot user's home (which gets its
+# perms massaged at runtime). Owned by root:root, mode 0755 — only the
+# secrets-init compose service runs as root and invokes this; honeybot
+# (UID 10001) can read+exec but not modify.
+COPY --chmod=0755 scripts/secrets-init-entrypoint.sh /usr/local/bin/secrets-init-entrypoint.sh
 
 # Varlock's autoDetectContextPath() reads process.env.PWD to locate
 # .env.schema. Docker's WORKDIR sets cwd but doesn't export PWD, so we set

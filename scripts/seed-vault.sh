@@ -154,6 +154,17 @@ ensure_item "Sentry"   "API Credential" 'auth_token[password]='
 ensure_item "Mercury"  "API Credential" 'api_token[password]='
 ensure_item "Telegram" "API Credential" 'token[password]='
 
+# BlueBubbles relay (Phase 9 iMessage gateway). server_url is the URL of
+# the BlueBubbles Server running on the home Mac mini (e.g.
+# https://imessage.relay.honeybot.honeymanenterprises.com:1234); password
+# is the shared secret configured in BlueBubbles' setup wizard. Both must
+# match what the Mac side expects — fill them in 1Password by hand after
+# the relay is installed and configured. Empty here disables the
+# integration cleanly.
+ensure_item "BlueBubbles" "API Credential" \
+  'server_url[text]=' \
+  'password[password]='
+
 ensure_item "Honcho" "API Credential" \
   'api_key[password]=' \
   'base_url[text]='

@@ -23,9 +23,13 @@ After Phase 1, the following are true:
    `HONEYBOT_INSTANCE_TAG` env var if you want a different tag). Without
    this, `ensure-aws-infra.sh` no-ops and DLM has nothing to target.
 4. **EIP allocated and associated** with the EC2 instance.
-5. **Route53 apex record** (`honeybot.honeymanenterprises.com` → EIP)
-   created manually in the AWS console. CNAMEs for `hooks.*` /
-   `*.honeybot.*` are not needed until Phase 2 webhooks ship.
+5. **Route53 records** managed manually in the AWS console:
+
+   | Record | Type | Target | Notes |
+   |--------|------|--------|-------|
+   | `honeybot.honeymanenterprises.com` | A | EC2 EIP | Stable across stop/start |
+   | `imessage.relay.honeybot.honeymanenterprises.com` | A | Home Mac public IP | Update when residential ISP rotates the IP. Used by Phase 9 iMessage relay (`ssh hermes-mac` from the EC2). DNS is the single point of truth so the EC2 doesn't need re-configuring on IP change. |
+   | `hooks.honeybot.*` / `*.honeybot.*` | CNAME | apex | Add when Phase 2 webhooks ship |
 6. **1Password** `Honeybot` vault + service account set up (see root
    `README.md` §1). `op.env` present at the repo root with
    `OP_SERVICE_ACCOUNT_TOKEN=ops_...`. Vault item creation is handled

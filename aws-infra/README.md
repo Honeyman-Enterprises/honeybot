@@ -21,6 +21,11 @@ Route53 records are managed manually in the AWS console:
 
 - `honeybot.honeymanenterprises.com` → A record pointing at the EC2
   Elastic IP. Stable across stop/start; no automation needed.
+- `imessage.relay.honeybot.honeymanenterprises.com` → A record pointing
+  at the home Mac mini's public IP. Phase 9 iMessage relay uses this
+  via `ssh hermes-mac` from the EC2. DNS is the single point of truth
+  so the EC2 doesn't have to be reconfigured when the residential ISP
+  rotates the home IP — just update the record.
 - `hooks.honeybot.*` / `*.honeybot.*` CNAMEs → only added if/when Phase 2
   webhooks need them. Add directly in the console.
 

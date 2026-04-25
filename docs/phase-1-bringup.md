@@ -196,8 +196,8 @@ docker group GID isn't 988), set the override env vars before
 `docker compose up`:
 
 ```bash
-export HONEYBOT_REDEPLOY_UID=$(id -u ec2-user 2>/dev/null || id -u)
-export HONEYBOT_REDEPLOY_GID=$(id -g ec2-user 2>/dev/null || id -g)
+export HONEYBOT_HOST_UID=$(id -u ec2-user 2>/dev/null || id -u)
+export HONEYBOT_HOST_GID=$(id -g ec2-user 2>/dev/null || id -g)
 export HONEYBOT_DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)
 docker compose up -d
 ```

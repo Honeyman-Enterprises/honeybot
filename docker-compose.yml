@@ -166,6 +166,27 @@ services:
     container_name: honeybot-redeploy
     restart: unless-stopped
 
+    # Run as ec2-user's UID/GID on the host so `git fetch` + `git reset
+    # --hard` under /repo produce objects owned by ec2-user. Without this,
+    # the sidecar runs as root (default in the docker:cli image) and
+    # writes root-owned blobs into .git/objects, which blocks subsequent
+    # ec2-user `git fetch` from the host shell with:
+    #   "error: insufficient permission for adding an object to repository"
+    #
+    # group_add attaches the host's docker group so the non-root UID can
+    # still read/write /var/run/docker.sock and issue `docker compose`.
+    #
+    # Defaults match Amazon Linux 2023 (ec2-user=1000:1000, docker
+    # group=988). Override via shell env when your host differs:
+    #
+    #   export HONEYBOT_REDEPLOY_UID=$(id -u ec2-user 2>/dev/null || id -u)
+    #   export HONEYBOT_REDEPLOY_GID=$(id -g ec2-user 2>/dev/null || id -g)
+    #   export HONEYBOT_DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)
+    #   docker compose up -d
+    user: "${HONEYBOT_REDEPLOY_UID:-1000}:${HONEYBOT_REDEPLOY_GID:-1000}"
+    group_add:
+      - "${HONEYBOT_DOCKER_GID:-988}"
+
     environment:
       # Seconds between polls. 120s is cheap (1 git fetch/2min) and well
       # under GitHub's unauthenticated rate budget.
@@ -179,6 +200,12 @@ services:
       # Pin project name so `docker compose` inside the sidecar targets
       # the same project the host created (name: honeybot above).
       COMPOSE_PROJECT_NAME: honeybot
+      # `git config --global` in watch.sh writes to $HOME/.gitconfig.
+      # Default $HOME=/root isn't writable by the non-root UID we run as,
+      # so point it at /tmp (always writable, ephemeral, fine because
+      # watch.sh re-applies the safe.directory config on every container
+      # start anyway).
+      HOME: /tmp
 
     volumes:
       # Host repo → /repo. Read-write because pull-and-restart.sh does

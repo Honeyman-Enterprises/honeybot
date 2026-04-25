@@ -42,14 +42,26 @@ command -v op >/dev/null 2>&1 || die "op CLI not in image"
 command -v jq >/dev/null 2>&1 || die "jq not in image"
 
 # Sanity check: token authenticates AND the vault is in scope.
-if ! op vault get "$VAULT" >/dev/null 2>&1; then
-  die "cannot access '$VAULT' vault with this service account token"
-fi
+#
+# Capture op's stderr instead of redirecting to /dev/null. Earlier versions
+# silently swallowed it and printed a hard-coded "cannot access vault"
+# message regardless of the real failure (token-scope vs $HOME ownership
+# vs network), which was actively misleading during bring-up. Now the
+# actual op error surfaces in the FATAL line.
+op_err="$(op vault get "$VAULT" 2>&1 >/dev/null)" || \
+  die "op vault get '$VAULT' failed:
+$op_err"
 
-# One API call to enumerate existing items, then O(1) membership checks.
-# Cheaper than N `op item get` probes and much faster on cold boot.
-EXISTING="$(op item list --vault "$VAULT" --format json 2>/dev/null \
-  | jq -r '.[].title' || true)"
+# Same treatment for the item enumeration: don't drop op's stderr on the
+# floor. If the listing fails, fail loud with the real reason.
+EXISTING="$(op item list --vault "$VAULT" --format json 2>op_list_err.tmp \
+  | jq -r '.[].title')" || {
+    err="$(cat op_list_err.tmp 2>/dev/null || true)"
+    rm -f op_list_err.tmp
+    die "op item list --vault '$VAULT' failed:
+$err"
+  }
+rm -f op_list_err.tmp
 
 item_exists() {
   # grep -Fx: fixed string, full-line match (avoids partial-name collisions).

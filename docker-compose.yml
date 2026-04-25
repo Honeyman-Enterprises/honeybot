@@ -268,7 +268,8 @@ services:
   #
   # Routes:
   #   hooks.honeybot.honeymanenterprises.com/webhooks/* → honeybot:8644
-  #   (Hermes webhook listener; enabled by Phase 2 config change.)
+  #   ├─ /webhooks/bluebubbles  → Hermes BlueBubbles (iMessage) adapter
+  #   └─ /webhooks/<future>     → reserved for Telegram (Phase 6) etc.
   #
   # nginx must be on honeynet to resolve upstream service names
   # (honeybot, mcp-*).

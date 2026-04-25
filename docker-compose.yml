@@ -53,7 +53,9 @@ services:
     # Override the honeybot entrypoint. `cd /home/honeybot` because
     # seed-vault.sh expects to run from there (that's where .env.schema
     # and the op CLI state live). emit-runtime-env.sh writes its output
-    # to the bind-mounted /repo.
+    # to the bind-mounted /repo. ensure-aws-infra.sh runs last and
+    # no-ops on machines where no honeybot-prod-tagged instance exists,
+    # so it's safe to invoke unconditionally on laptops too.
     entrypoint:
       - /bin/sh
       - -c
@@ -62,6 +64,7 @@ services:
         cd /home/honeybot
         ./seed-vault.sh
         ./emit-runtime-env.sh /repo/.env.runtime
+        ./ensure-aws-infra.sh
 
     # No network attachment — it only talks to 1Password over the host's
     # default egress. Putting it on honeynet would invite accidental

@@ -197,6 +197,12 @@ COPY --chmod=0755 --chown=honeybot:honeybot scripts/seed-vault.sh        ./seed-
 # one-shot compose service (same image, different entrypoint). See
 # docker-compose.yml for wiring.
 COPY --chmod=0755 --chown=honeybot:honeybot scripts/emit-runtime-env.sh  ./emit-runtime-env.sh
+# ensure-aws-infra.sh runs from secrets-init too. It calls into
+# aws-infra/ebs-dlm-snapshot-policy.sh, so the whole aws-infra/ directory
+# ships in the image. Both pieces are idempotent + skip cleanly when no
+# honeybot-prod-tagged EC2 instance is found (laptop-safe).
+COPY --chown=honeybot:honeybot aws-infra/                            ./aws-infra/
+COPY --chmod=0755 --chown=honeybot:honeybot scripts/ensure-aws-infra.sh ./ensure-aws-infra.sh
 
 # Varlock's autoDetectContextPath() reads process.env.PWD to locate
 # .env.schema. Docker's WORKDIR sets cwd but doesn't export PWD, so we set

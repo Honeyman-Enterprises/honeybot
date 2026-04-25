@@ -3,44 +3,58 @@
 AWS resources for Honeybot, managed via AWS CLI instead of Terraform.
 Each script is idempotent — running it twice leaves the same end state as
 running it once. No state file. Uses the bot-level AWS creds from
-`op://Honeybot/AWS/*` (resolved via varlock).
+`op://Honeybot/AWS/*` (resolved by 1Password's `op` CLI).
+
+These scripts are **invoked from inside the `secrets-init` container** on
+every `docker compose up`, via `scripts/ensure-aws-infra.sh`. They are
+not meant to be run directly by a human anymore — the container does it
+for you, automatically and idempotently.
 
 TLS certs are issued and renewed in-process by **`lua-resty-acme`**
 against Let's Encrypt (HTTP-01 challenge) inside the nginx/OpenResty
-container — see `../nginx/`. No certbot binary, no sidecar, no cron,
-no Route53 DNS-01 flow, no `/etc/letsencrypt` volume, and no AWS ACM
-wiring (public ACM certs can't be exported anyway, and Private CA is
-~$400/mo — neither fits this topology). The scripts here cover only
-Route53 A/CNAME records and EBS snapshot lifecycle.
+container — see `../nginx/`. No certbot binary, no sidecar, no cron, no
+Route53 DNS-01 flow, no `/etc/letsencrypt` volume, and no AWS ACM wiring
+(public ACM certs can't be exported anyway, and Private CA is ~$400/mo —
+neither fits this topology).
+
+Route53 records are managed manually in the AWS console:
+
+- `honeybot.honeymanenterprises.com` → A record pointing at the EC2
+  Elastic IP. Stable across stop/start; no automation needed.
+- `hooks.honeybot.*` / `*.honeybot.*` CNAMEs → only added if/when Phase 2
+  webhooks need them. Add directly in the console.
 
 ## Contents
 
 | File                           | Purpose |
 |--------------------------------|---------|
-| `route53-upsert.sh`            | Idempotent: creates/updates the A and CNAME records (honeybot + hooks + wildcard) pointing at the EC2 public IP (read from instance metadata). |
-| `ebs-dlm-snapshot-policy.sh`   | One-time-ish: creates an EBS Data Lifecycle Manager policy that snapshots the Docker volume daily and expires snapshots after 7 days. |
+| `ebs-dlm-snapshot-policy.sh`   | Idempotent: creates or updates an EBS Data Lifecycle Manager policy that snapshots volumes tagged `Name=honeybot-docker-data` daily, retaining 7. Also creates the `AWSDataLifecycleManagerDefaultRole` IAM role on first run. |
 
-## Run order (first time)
+The volume tagging itself (`Name=honeybot-docker-data` on the root EBS
+volume of the `honeybot-prod`-tagged instance) is applied automatically
+by `scripts/ensure-aws-infra.sh` on every secrets-init startup.
+
+## How it runs
+
+`docker compose up` triggers `secrets-init`, which runs (in order):
+
+1. `seed-vault.sh`         — idempotent 1Password vault item creation
+2. `emit-runtime-env.sh`   — writes `./.env.runtime` for ES + Neo4j
+3. `ensure-aws-infra.sh`   — calls `ebs-dlm-snapshot-policy.sh` and
+                             tags the root EBS volume
+
+`ensure-aws-infra.sh` looks for an EC2 instance tagged
+`Name=honeybot-prod` (override via `HONEYBOT_INSTANCE_TAG`). If none is
+running — e.g. on a laptop — it exits 0 cleanly without touching AWS.
+
+## Manual run (debugging only)
+
+If you ever need to run the DLM policy script outside the container —
+e.g. to debug a permissions issue from the EC2 host — you can:
 
 ```bash
-# 1. Seed Route53 records. Must be run from the EC2 itself so it can read
-#    its own public IP. Uses the bot-level AWS creds.
-varlock run -- ./aws-infra/route53-upsert.sh
-
-# 2. Create the daily snapshot policy covering the Docker data volume.
-#    Identify the volume ID first (see comments inside the script).
+# Pull AWS creds into the env first (varlock or `op read` work)
 varlock run -- ./aws-infra/ebs-dlm-snapshot-policy.sh
 ```
 
-## Re-running after IP change
-
-The EC2 has an **Elastic IP**, so the public IP is stable across
-stop/start and Route53 records normally don't need to be touched after
-the initial upsert. If the EIP is ever replaced, re-running
-`route53-upsert.sh` is idempotent and will update the A record to the
-new IP.
-
-If a recurring refresh is ever needed, it MUST run inside a container
-(either as a Hermes cron in the honeybot container or as a dedicated
-sidecar) — not as a host-level crontab entry. See
-`docs/phase-1-bringup.md` for context.
+This is rarely necessary and is **not** part of any standard workflow.

@@ -63,7 +63,7 @@ value in 1Password + re-running is the rotation workflow.
 
 - `nginx/` — Dockerfile + nginx.conf + conf.d/ with vhosts for
   `honeybot.honeymanenterprises.com` and `hooks.honeybot...`.
-- `aws-infra/` — idempotent bash scripts for Route53 records + EBS DLM policy.
+- `aws-infra/` — idempotent bash scripts for the EBS DLM snapshot policy. Invoked from `secrets-init` via `scripts/ensure-aws-infra.sh` on every compose up. Route53 records are managed manually in the AWS console (apex A record → EIP).
 - `mcp/` — stub READMEs for Mercury, image-ingest, proxy-memory MCPs (Phase 5 + 8).
 
 ### Vault items

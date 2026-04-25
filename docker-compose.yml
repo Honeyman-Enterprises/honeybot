@@ -50,56 +50,32 @@ services:
     volumes:
       - .:/repo
 
-    # Run as the host's ec2-user UID so emit-runtime-env.sh can write
-    # /repo/.env.runtime. The honeybot image bakes a `honeybot` user at
-    # UID 10001, but /repo is bind-mounted from the host directory owned
-    # by ec2-user (1000:1000) — UID 10001 has no write permission there
-    # and emit-runtime-env.sh fails with "Permission denied".
+    # Start as root, drop privileges via gosu inside the entrypoint. This
+    # is the canonical Postgres/MySQL/Redis pattern, and it's the only
+    # shape that satisfies BOTH of op's safety checks simultaneously:
     #
-    # See the redeploy service below for the canonical rationale and
-    # the override env vars (HONEYBOT_HOST_UID / HONEYBOT_HOST_GID).
-    user: "${HONEYBOT_HOST_UID:-1000}:${HONEYBOT_HOST_GID:-1000}"
-
-    # Note on HOME: NOT set in the environment block. The op CLI's
-    # safety check refuses to operate when $HOME isn't a directory owned
-    # by the current UID. Setting HOME=/tmp fails it because /tmp is
-    # root:root mode 1777 — UID 1000 can write there but doesn't own it,
-    # so op errors out:
-    #   Can't continue. We can't safely access "/tmp/.config/op"
-    #   because it's not owned by the current user.
-    # Same shape for the daemon IPC at /tmp/com.agilebits.op.*.
+    #   1. op CLI walks the ancestors of $HOME looking for non-current-
+    #      UID-owned dirs and refuses to run if it finds any. mktemp under
+    #      /tmp leaves /tmp itself (root:root, mode 1777) in the ancestor
+    #      chain → rejected.
+    #   2. op-daemon resolves its PID-file path via getpwuid(getuid()),
+    #      NOT $HOME. With no /etc/passwd entry for the runtime UID it
+    #      falls back to a stale `/home/<x>/op-daemon.pid` and ENOENTs.
     #
-    # Instead, the entrypoint mktemps a per-run HOME owned by the
-    # current UID with mode 0700, and points XDG_RUNTIME_DIR at the
-    # same place so op's daemon socket lands under our owned tree.
+    # Compose's `user:` directive can't fix either — by entrypoint time
+    # you're already the unprivileged UID, with no chown rights and no
+    # /etc/passwd write rights. So we run as root, register the runtime
+    # UID in /etc/passwd, pre-chown a clean /home/secrets-init, then
+    # `exec gosu` to drop. Full rationale + impl in the script.
+    #
+    # HONEYBOT_HOST_UID / HONEYBOT_HOST_GID are read by the entrypoint
+    # script (defaults 1000:1000 = Amazon Linux 2023 ec2-user) and used
+    # for the privilege drop AND for chowning /home/secrets-init so op's
+    # ownership walk passes. Override in the host shell when your EC2
+    # isn't AL2023 — see the redeploy service below for the env vars.
+    user: "0:0"
 
-    # Override the honeybot entrypoint. `cd /home/honeybot` because
-    # seed-vault.sh expects to run from there (that's where .env.schema
-    # and the op CLI state live). The Dockerfile chmods /home/honeybot
-    # to 0755 specifically so this cd works under the host-UID override
-    # above (default `useradd -m` on Debian leaves it 0700, blocking
-    # traversal by anyone other than UID 10001). The COPY'd scripts are
-    # 0755 / 0644 so readable by any UID. emit-runtime-env.sh writes its
-    # output to the bind-mounted /repo. ensure-aws-infra.sh runs last
-    # and no-ops on machines where no honeybot-prod-tagged instance
-    # exists, so it's safe to invoke unconditionally on laptops too.
-    entrypoint:
-      - /bin/sh
-      - -c
-      - |
-        set -eu
-        # Per-run HOME owned by current UID (mode 0700 from mktemp -d).
-        # See HOME comment above for why /tmp itself doesn't work.
-        HOME="$(mktemp -d -t honeybot-op.XXXXXX)"
-        export HOME
-        # op CLI honors XDG_RUNTIME_DIR for the daemon socket; without
-        # this it falls back to /tmp/com.agilebits.op.* which is shared
-        # and trips the same ownership check.
-        export XDG_RUNTIME_DIR="$HOME"
-        cd /home/honeybot
-        ./seed-vault.sh
-        ./emit-runtime-env.sh /repo/.env.runtime
-        ./ensure-aws-infra.sh
+    entrypoint: ["/usr/local/bin/secrets-init-entrypoint.sh"]
 
     # No network attachment — it only talks to 1Password over the host's
     # default egress. Putting it on honeynet would invite accidental

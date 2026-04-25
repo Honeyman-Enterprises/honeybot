@@ -155,9 +155,9 @@ aws ec2 describe-tags \
 
 ## Troubleshooting
 
-### `git fetch` on the EC2 fails with "insufficient permission for adding an object"
+### `git fetch` / `git pull` on the EC2 fails with permission errors
 
-Symptom on the EC2 host shell:
+Symptoms on the EC2 host shell, any of:
 
 ```
 error: insufficient permission for adding an object to repository database .git/objects
@@ -165,19 +165,29 @@ fatal: failed to write object
 fatal: unpack-objects failed
 ```
 
-Cause: an earlier version of the `redeploy` sidecar ran as `root` (the
-default for the `docker:cli` base image) and wrote root-owned blobs into
-the bind-mounted `.git/objects/` directory. Once that's happened, the
-ec2-user shell can no longer add new objects via `git fetch`.
+```
+error: unable to unlink old 'path/to/file': Permission denied
+```
 
-Recovery (one-time, on the EC2):
+Cause: an earlier version of the `redeploy` sidecar ran as `root` (the
+default for the `docker:cli` base image) with the host repo bind-
+mounted into the container. Two consequences:
+
+- `git fetch` from inside the sidecar wrote **root-owned blobs into
+  `.git/objects/`**, blocking later writes by ec2-user.
+- `git reset --hard origin/main` from inside the sidecar **rewrote
+  working-tree files as root**, blocking later `git pull` from
+  unlinking them.
+
+So both `.git/` and the working tree may be poisoned. The chown
+recovery has to cover the whole repo, not just `.git`:
 
 ```bash
 cd ~/honeybot
-sudo chown -R ec2-user:ec2-user .git
+sudo chown -R ec2-user:ec2-user .
 ```
 
-After that, `git fetch` works again, and the new `redeploy` sidecar
+After that, `git pull` works again, and the new `redeploy` sidecar
 config (runs as UID 1000 / GID 1000 with `group_add` for the docker
 socket — see `docker-compose.yml`) prevents recurrence.
 

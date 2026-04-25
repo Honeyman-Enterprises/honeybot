@@ -29,8 +29,22 @@
 # let the next boot recreate it cleanly.
 
 set -eu
+# pipefail so a redirect failure in `cmd 2>file | other` aborts. Without
+# this, a bad redirect (e.g. unwritable cwd) silently leaves the LHS
+# stderr broken, the pipeline returns the RHS's exit, and we'd carry on
+# with empty data — historically that caused seed-vault to wipe its
+# `EXISTING` set and re-create every item as a duplicate.
+( set -o pipefail ) 2>/dev/null && set -o pipefail || true
 
 VAULT="${HONEYBOT_VAULT:-Honeybot}"
+
+# Stderr capture files for op invocations. Always under a tmpdir we own
+# (mktemp respects $TMPDIR, default /tmp) — the previous relative path
+# `op_list_err.tmp` failed when cwd was /home/honeybot (owned 10001:10001,
+# not writable by the dropped UID), which triggered the duplicate-item
+# regression described above.
+TMP_ERR_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_ERR_DIR"' EXIT
 
 log() { printf 'seed-vault: %s\n' "$*"; }
 die() { printf 'seed-vault: FATAL: %s\n' "$*" >&2; exit 1; }
@@ -53,15 +67,14 @@ op_err="$(op vault get "$VAULT" 2>&1 >/dev/null)" || \
 $op_err"
 
 # Same treatment for the item enumeration: don't drop op's stderr on the
-# floor. If the listing fails, fail loud with the real reason.
-EXISTING="$(op item list --vault "$VAULT" --format json 2>op_list_err.tmp \
-  | jq -r '.[].title')" || {
-    err="$(cat op_list_err.tmp 2>/dev/null || true)"
-    rm -f op_list_err.tmp
-    die "op item list --vault '$VAULT' failed:
-$err"
-  }
-rm -f op_list_err.tmp
+# floor. If the listing fails, fail loud with the real reason — and do
+# NOT proceed, because an empty EXISTING would be indistinguishable from
+# "vault is empty" and we'd create duplicates of every item.
+list_err="$TMP_ERR_DIR/op_list_err"
+EXISTING="$(op item list --vault "$VAULT" --format json 2>"$list_err" \
+  | jq -r '.[].title')" || \
+  die "op item list --vault '$VAULT' failed:
+$(cat "$list_err" 2>/dev/null || true)"
 
 item_exists() {
   # grep -Fx: fixed string, full-line match (avoids partial-name collisions).

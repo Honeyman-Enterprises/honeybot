@@ -153,6 +153,45 @@ aws ec2 describe-tags \
 # Expect: one entry, the root volume of the honeybot-prod instance.
 ```
 
+## Troubleshooting
+
+### `git fetch` on the EC2 fails with "insufficient permission for adding an object"
+
+Symptom on the EC2 host shell:
+
+```
+error: insufficient permission for adding an object to repository database .git/objects
+fatal: failed to write object
+fatal: unpack-objects failed
+```
+
+Cause: an earlier version of the `redeploy` sidecar ran as `root` (the
+default for the `docker:cli` base image) and wrote root-owned blobs into
+the bind-mounted `.git/objects/` directory. Once that's happened, the
+ec2-user shell can no longer add new objects via `git fetch`.
+
+Recovery (one-time, on the EC2):
+
+```bash
+cd ~/honeybot
+sudo chown -R ec2-user:ec2-user .git
+```
+
+After that, `git fetch` works again, and the new `redeploy` sidecar
+config (runs as UID 1000 / GID 1000 with `group_add` for the docker
+socket — see `docker-compose.yml`) prevents recurrence.
+
+If your EC2 isn't Amazon Linux 2023 (ec2-user is not 1000:1000, or
+docker group GID isn't 988), set the override env vars before
+`docker compose up`:
+
+```bash
+export HONEYBOT_REDEPLOY_UID=$(id -u ec2-user 2>/dev/null || id -u)
+export HONEYBOT_REDEPLOY_GID=$(id -g ec2-user 2>/dev/null || id -g)
+export HONEYBOT_DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)
+docker compose up -d
+```
+
 ## Cost
 
 | Resource | Monthly |

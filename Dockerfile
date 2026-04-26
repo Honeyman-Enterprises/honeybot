@@ -226,6 +226,24 @@ RUN hermes config set memory.provider mem0
 # is volume-mounted, so config is baked in at image build time.
 RUN hermes config set display.interim_assistant_messages false
 
+# ---- Display: silence tool-progress notifications -------------------------
+# Even with interim_assistant_messages=false, Hermes still emits per-tool
+# progress lines (e.g. ":books: skill_view: \"gmail\"") to the chat surface
+# via the tool_progress feed (see agent/display.py around line 950 for the
+# emoji-prefix formatting, and gateway/run.py around 9350 for the resolution
+# of the `tool_progress` config). Default is "all" — every tool call posts
+# a separate Slack message — which is identical chat-noise to the old
+# interim commentary, just emitted by a different code path.
+#
+# `off` silences the tool feed entirely; the final response is the only
+# thing that lands in chat. The CLI / `hermes logs` still see everything.
+# Other valid values: `new` (only on tool change), `all` (default), `verbose`.
+#
+# Same write-to-config rationale as the lines above: only .hermes/data is
+# volume-mounted, so config written by `hermes config set` at runtime is
+# wiped on every container recreate. Bake it into the image.
+RUN hermes config set display.tool_progress off
+
 COPY --chown=honeybot:honeybot skills/         ./.hermes/skills/
 # Per-message gateway hooks. honeybot-identity in particular is load-bearing
 # for the per-user identity model: it captures the requesting Slack user's

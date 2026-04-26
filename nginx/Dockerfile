@@ -68,8 +68,20 @@ FROM openresty/openresty:1.25.3.2-2-alpine-fat
 #
 # `openssl` apk is the CLI used below to mint the bootstrap self-signed
 # pair; not needed by lua-resty-* themselves (they FFI into libssl3).
+#
+# lua-resty-acme is pinned. Unpinned `opm get` resolves to whatever's
+# tagged latest at build time, which means two consecutive image
+# rebuilds can land on different module versions with subtly different
+# init() semantics. We wasted real time chasing a phantom "AUTOSSL.config
+# is nil" bug last cycle that turned out to be a load-order issue masked
+# by an unrelated 0.16.x refactor — keeping the version frozen so the
+# only moving parts are our config and our code.
+#
+# To bump: check fffonion/lua-resty-acme tags, test on a throwaway image
+# first, update the pin here in the same PR as any config changes the
+# new version requires.
 RUN apk add --no-cache openssl \
- && opm get fffonion/lua-resty-acme
+ && opm get fffonion/lua-resty-acme=0.16.0
 
 # --- Bootstrap self-signed cert ---------------------------------------
 # Fallback pair referenced by the ssl_certificate / ssl_certificate_key

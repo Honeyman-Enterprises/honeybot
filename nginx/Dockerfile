@@ -80,7 +80,16 @@ FROM openresty/openresty:1.25.3.2-2-alpine-fat
 # To bump: check fffonion/lua-resty-acme tags, test on a throwaway image
 # first, update the pin here in the same PR as any config changes the
 # new version requires.
-RUN apk add --no-cache openssl \
+# `ca-certificates` is REQUIRED, not optional, even though Alpine omits it
+# by default. lua-resty-acme talks to acme-v02.api.letsencrypt.org over
+# TLS via lua-resty-http, and resty-http defaults to verifying the
+# server cert. Without a CA bundle on disk and a `lua_ssl_trusted_-
+# certificate` directive pointing at it, every ACME directory fetch dies
+# with `acme directory request failed: 20: unable to get local issuer
+# certificate` — which is exactly what we hit on first SNI to the hooks
+# vhost. Pair this apk addition with the corresponding directive in
+# nginx.conf; both are needed.
+RUN apk add --no-cache openssl ca-certificates \
  && opm get fffonion/lua-resty-acme=0.16.0
 
 # --- Bootstrap self-signed cert ---------------------------------------

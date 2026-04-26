@@ -3,10 +3,24 @@
 # by exchanging their stored refresh token. Output: bare access token on
 # stdout. Errors to stderr, non-zero exit on failure.
 #
-# Reads:
-#   op://Honeybot/Gmail-{UID}/refresh_token
-#   op://Honeybot/Gmail-{UID}/client_id
-#   op://Honeybot/Gmail-{UID}/client_secret
+# Identity model:
+#   The user's refresh token is per-user, stored at:
+#     op://Honeybot/Gmail-{UID}/refresh_token
+#
+#   The OAuth client_id/client_secret are SHARED across all users, stored at:
+#     op://Honeybot/GoogleOAuth/{client_id,client_secret}
+#
+#   This is intentional: the OAuth client is a property of the bot/app, not
+#   the human. Per-user OAuth clients caused enormous setup friction (each
+#   person had to spin up their own GCP project) and gave us nothing extra.
+#   Per-user refresh tokens are still per-user — that's the privacy boundary.
+#
+# Legacy fallback:
+#   For users who connected via the old per-user-GCP-project flow (where
+#   client_id/client_secret were stored at op://Honeybot/Gmail-{UID}/), we
+#   still honor those values when present. Detection: if the per-user
+#   client_id field starts with "shared:GoogleOAuth", use the shared creds;
+#   otherwise use the per-user values.
 #
 # Usage:
 #   access_token="$(./_token.sh)"             # uses $HONEYBOT_SLACK_USER
@@ -26,10 +40,21 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# creds.sh will fail closed if no user is set
+# Always per-user: refresh token
 refresh_token="$("$CREDS" Gmail refresh_token "${user_arg[@]}")"
-client_id="$("$CREDS" Gmail client_id "${user_arg[@]}")"
-client_secret="$("$CREDS" Gmail client_secret "${user_arg[@]}")"
+
+# Determine OAuth client creds source: shared (default) or legacy per-user
+per_user_client_id="$("$CREDS" Gmail client_id "${user_arg[@]}" 2>/dev/null || true)"
+
+if [[ "$per_user_client_id" == "shared:GoogleOAuth" || -z "$per_user_client_id" ]]; then
+  # Shared client — bot-level GoogleOAuth item
+  client_id="$(op read 'op://Honeybot/GoogleOAuth/client_id')"
+  client_secret="$(op read 'op://Honeybot/GoogleOAuth/client_secret')"
+else
+  # Legacy per-user client (pre-shared-creds users)
+  client_id="$per_user_client_id"
+  client_secret="$("$CREDS" Gmail client_secret "${user_arg[@]}")"
+fi
 
 response="$(curl -sS --fail-with-body -X POST https://oauth2.googleapis.com/token \
   -H "Content-Type: application/x-www-form-urlencoded" \

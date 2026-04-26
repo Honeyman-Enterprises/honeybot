@@ -212,6 +212,12 @@ RUN mkdir -p .hermes/config .hermes/skills .hermes/data workspace
 RUN hermes config set memory.provider mem0
 
 COPY --chown=honeybot:honeybot skills/         ./.hermes/skills/
+# Per-message gateway hooks. honeybot-identity in particular is load-bearing
+# for the per-user identity model: it captures the requesting Slack user's
+# ID from the agent:start event and writes it to a per-session sidecar file
+# that skills/_lib/creds.sh reads. Without this hook installed in
+# ~/.hermes/hooks/, every per-user skill (Gmail, AWS, HubSpot) fails closed.
+COPY --chown=honeybot:honeybot hooks/          ./.hermes/hooks/
 COPY --chown=honeybot:honeybot .env.schema     ./
 COPY --chmod=0755 --chown=honeybot:honeybot scripts/seed-vault.sh        ./seed-vault.sh
 # emit-runtime-env.sh writes /repo/.env.runtime from the `secrets-init`

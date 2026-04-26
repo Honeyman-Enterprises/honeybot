@@ -46,20 +46,50 @@ it behind a small allow-list of Slack user IDs permitted to do admin things.
 ## How the Slack user ID reaches a skill
 
 Hermes already knows who sent the message — it has to, in order to enforce
-`SLACK_ALLOWED_USERS`. We surface that ID to skill subprocesses via:
+`SLACK_ALLOWED_USERS`. The gateway exposes that ID inside the agent process
+via `gateway.session_context.HERMES_SESSION_USER_ID` (a `ContextVar`,
+task-local across asyncio tasks). But ContextVars do not propagate to
+child processes, and shell skills run as subprocesses that inherit
+`os.environ`, not contextvars.
 
-1. **Env var** (preferred): `HONEYBOT_SLACK_USER` set by a thin Hermes adapter
-   patch or wrapper, OR by the agent's system prompt instructing the LLM to
-   export it before shelling out.
-2. **Positional arg**: skills accept `--user $UID` as their first flag.
+Setting `os.environ["HONEYBOT_SLACK_USER"]` from a per-message handler
+would race under concurrent traffic from different users (the exact bug
+that motivated the contextvars rewrite in the first place — see
+`gateway/session_context.py`).
 
-Skills **MUST** refuse to run without a user ID. No default, no fallback to
-"the last user", no env-level `DEFAULT_USER`. Missing ID = hard error.
+We bridge the gap with a **per-session sidecar file** populated by a
+gateway hook:
 
-> **Open item:** verify at runtime whether Hermes exposes the Slack user ID to
-> tool subprocess env. If yes, use env. If no, add it to the system prompt and
-> have skills accept `--user`. Either way the shared helper
-> `skills/_lib/creds.sh` is the only code path that reads from the vault.
+1. The gateway emits `agent:start` with `context["user_id"]` set to the
+   requesting Slack user's ID (see `gateway/run.py`).
+2. Our hook at `hooks/honeybot-identity/handler.py` (shipped to
+   `~/.hermes/hooks/honeybot-identity/` by the Dockerfile) catches that
+   event and writes the ID to:
+
+   ```
+   /tmp/honeybot-identity/{session_key_safe}/HONEYBOT_SLACK_USER
+   ```
+
+   where `session_key_safe` is `$HERMES_SESSION_KEY` with `:` and `/`
+   replaced by `_`. Each session gets its own directory, which is
+   concurrency-safe because two messages in the same session are
+   serialized by the gateway anyway.
+
+3. `skills/_lib/creds.sh` resolves the user ID with this precedence:
+
+   1. `--user UID` (explicit override, used by admin/debug scripts)
+   2. `$HONEYBOT_SLACK_USER` (CLI / local-dev override, set in `op.env`)
+   3. The sidecar file, found via `$HERMES_SESSION_KEY` (which IS in
+      subprocess env — see `gateway/run.py:os.environ["HERMES_SESSION_KEY"] = …`)
+
+If none of those resolve to a valid Slack UID, `creds.sh` refuses to read
+the vault. Fail-closed, no defaults, no fallback to "the last user".
+
+Skills **MUST** continue to refuse to run without a user ID. The hook is
+an enabler, not an escape hatch — its absence (e.g. on a CLI install
+without `~/.hermes/hooks/honeybot-identity/`) means per-user skills are
+unusable, which is the correct safe state for a multi-tenant deployment
+that's missing its identity wiring.
 
 ## OAuth for per-user Google / AWS (no inbound port)
 

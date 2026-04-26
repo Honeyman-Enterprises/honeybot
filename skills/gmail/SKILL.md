@@ -139,16 +139,20 @@ admin/debug only) pass `--user <UID>` as the FIRST arg.
 
 ## How `$HONEYBOT_SLACK_USER` reaches the skill
 
-See `docs/identity-model.md` § "How the Slack user ID reaches a skill". As
-of this skill's writing, the Slack user ID is expected to be exported into
-the agent's tool-subprocess env by the Hermes Slack adapter. If it is not,
-this skill fails closed with a clear error — it never guesses.
+In production (gateway/Slack), the requesting user's Slack ID is captured
+per-message by the `honeybot-identity` hook
+(`hooks/honeybot-identity/handler.py`) on the gateway's `agent:start`
+event, and written to a per-session sidecar file. `creds.sh` resolves
+the user ID by reading that file, keyed on `$HERMES_SESSION_KEY` (which
+IS exported into subprocess env by the gateway). See
+`docs/identity-model.md` § "How the Slack user ID reaches a skill" for
+the full data flow.
 
-**Open item (carried over from identity-model.md):** confirm the Hermes
-Slack adapter exports `HONEYBOT_SLACK_USER` into every tool subprocess. If
-it does not, the agent's system prompt must be updated to inject the user
-ID into `bin/gmail.sh` invocations as `--user <UID>`. Track this in a
-follow-up issue.
+For CLI / local-dev / tests, set `HONEYBOT_SLACK_USER` in `op.env` (or
+your shell) and `creds.sh` will use it directly. To override for
+admin/debug, pass `--user <UID>` as the FIRST arg to `gmail.sh`. Without
+any of these resolving to a valid Slack UID, every skill in this
+directory fails closed — that's the intended behavior.
 
 ## Guardrails
 

@@ -17,9 +17,26 @@ op://Honeybot/{Service}-{UID}/... — has to fail closed.
 
 Setting os.environ["HONEYBOT_SLACK_USER"] from this hook would be a race
 condition under concurrent messages from different users. Instead we
-write the ID to a per-session file keyed on $HERMES_SESSION_KEY, which
-*is* exported into subprocess env. creds.sh reads that file, gets the
-user ID, builds the vault path, and proceeds.
+write the ID to a per-session file keyed on the session_key, which
+*is* exported into subprocess env (Hermes sets os.environ["HERMES_SESSION_KEY"]
+in run_sync just before tool execution). creds.sh reads that file, gets
+the user ID, builds the vault path, and proceeds.
+
+Reading the session_key in this hook
+------------------------------------
+We read it via gateway.session_context.get_session_env, NOT os.environ.
+Why: at agent:start emit time (gateway/run.py:4676), the gateway has
+already set the HERMES_SESSION_KEY ContextVar (gateway/run.py:4226 via
+_set_session_env), but it has NOT yet set os.environ["HERMES_SESSION_KEY"]
+— that happens later, inside run_sync (gateway/run.py:9732), after the
+hook has fired. Reading os.environ here therefore raced and produced the
+"agent:start fired without HERMES_SESSION_KEY in env" warning, which in
+turn caused the sidecar to never be written and every per-user skill to
+fail closed.
+
+get_session_env() reads the contextvar first and falls back to os.environ
+for CLI/cron paths that don't go through the gateway, so it's safe in all
+contexts.
 
 Lifecycle
 ---------
@@ -47,6 +64,21 @@ import logging
 import os
 import re
 from pathlib import Path
+
+# Prefer the gateway's contextvar-aware session accessor. At agent:start
+# emit time, the gateway has already populated the HERMES_SESSION_KEY
+# ContextVar but has NOT yet written it to os.environ — that happens
+# later in run_sync. See module docstring for the full ordering.
+#
+# Fall back to os.environ when the gateway module isn't importable
+# (e.g. CLI tests, hook unit tests, cron jobs that load this module
+# directly). The fallback preserves the legacy behavior so we never get
+# *worse* than before.
+try:
+    from gateway.session_context import get_session_env  # type: ignore
+except ImportError:  # pragma: no cover - exercised only in standalone tests
+    def get_session_env(name: str, default: str = "") -> str:
+        return os.environ.get(name, default)
 
 logger = logging.getLogger("hooks.honeybot-identity")
 
@@ -112,13 +144,16 @@ async def handle(event_type: str, context: dict) -> None:
     """
     try:
         if event_type == "agent:start":
-            session_key = os.environ.get("HERMES_SESSION_KEY", "")
+            session_key = get_session_env("HERMES_SESSION_KEY", "")
             user_id = (context.get("user_id") or "").strip()
 
             if not session_key:
+                # If we're here despite reading via get_session_env, neither
+                # the contextvar nor os.environ had a value. That's a real
+                # bug in the gateway, not the race we used to hit.
                 logger.warning(
-                    "agent:start fired without HERMES_SESSION_KEY in env; "
-                    "skipping sidecar write"
+                    "agent:start fired without HERMES_SESSION_KEY in "
+                    "contextvar or env; skipping sidecar write"
                 )
                 return
 
@@ -148,7 +183,7 @@ async def handle(event_type: str, context: dict) -> None:
             )
 
         elif event_type == "session:end":
-            session_key = os.environ.get("HERMES_SESSION_KEY", "")
+            session_key = get_session_env("HERMES_SESSION_KEY", "")
             if not session_key:
                 return
             _delete_session(session_key)

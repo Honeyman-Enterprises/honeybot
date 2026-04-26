@@ -80,7 +80,31 @@ gateway hook:
    1. `--user UID` (explicit override, used by admin/debug scripts)
    2. `$HONEYBOT_SLACK_USER` (CLI / local-dev override, set in `op.env`)
    3. The sidecar file, found via `$HERMES_SESSION_KEY` (which IS in
-      subprocess env — see `gateway/run.py:os.environ["HERMES_SESSION_KEY"] = …`)
+      subprocess env by the time tools run — Hermes sets
+      `os.environ["HERMES_SESSION_KEY"]` inside `run_sync` before tool
+      execution; see `gateway/run.py`)
+
+### Reading the session key inside the gateway hook
+
+`HERMES_SESSION_KEY` exists in two places at different points in the
+message lifecycle:
+
+| When | ContextVar (in-process) | `os.environ` (subprocesses) |
+| --- | --- | --- |
+| Before `agent:start` emit | ✅ set by `_set_session_env` | ❌ not yet set |
+| Inside skill subprocesses | n/a | ✅ set by `run_sync` |
+
+The gateway hook fires at `agent:start`, **before** Hermes writes the
+env var. Hooks that need the session key must read it via
+`gateway.session_context.get_session_env("HERMES_SESSION_KEY")`, which
+checks the contextvar first and falls back to `os.environ` (for CLI/cron
+contexts that bypass the gateway). Reading `os.environ` directly from a
+hook produced the long-running "agent:start fired without
+HERMES_SESSION_KEY in env" warning and broke the sidecar pipeline.
+
+Skill subprocesses have it easier — they can just read
+`$HERMES_SESSION_KEY` from the environment, which is what
+`skills/_lib/creds.sh` does today.
 
 If none of those resolve to a valid Slack UID, `creds.sh` refuses to read
 the vault. Fail-closed, no defaults, no fallback to "the last user".

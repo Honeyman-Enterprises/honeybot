@@ -80,7 +80,16 @@ FROM openresty/openresty:1.25.3.2-2-alpine-fat
 # To bump: check fffonion/lua-resty-acme tags, test on a throwaway image
 # first, update the pin here in the same PR as any config changes the
 # new version requires.
-RUN apk add --no-cache openssl \
+# `ca-certificates` is REQUIRED, not optional, even though Alpine omits it
+# by default. lua-resty-acme talks to acme-v02.api.letsencrypt.org over
+# TLS via lua-resty-http, and resty-http defaults to verifying the
+# server cert. Without a CA bundle on disk and a `lua_ssl_trusted_-
+# certificate` directive pointing at it, every ACME directory fetch dies
+# with `acme directory request failed: 20: unable to get local issuer
+# certificate` — which is exactly what we hit on first SNI to the hooks
+# vhost. Pair this apk addition with the corresponding directive in
+# nginx.conf; both are needed.
+RUN apk add --no-cache openssl ca-certificates \
  && opm get fffonion/lua-resty-acme=0.16.0
 
 # --- Bootstrap self-signed cert ---------------------------------------
@@ -108,7 +117,31 @@ RUN mkdir -p /etc/openresty/acme-storage \
 # Drop the upstream default server block; we supply our own via conf.d.
 RUN rm -f /etc/nginx/conf.d/default.conf
 
-COPY nginx.conf        /etc/nginx/nginx.conf
+# nginx.conf goes to the path nginx ACTUALLY reads at startup, which on the
+# openresty/openresty:*-alpine-fat image is
+# /usr/local/openresty/nginx/conf/nginx.conf — NOT /etc/nginx/nginx.conf.
+#
+# We chased a phantom "lua-resty-acme silently fails to initialize" bug for
+# an entire session because the Dockerfile copied our config to
+# /etc/nginx/nginx.conf, which nginx never read. The image's stock config
+# at /usr/local/openresty/nginx/conf/nginx.conf was loaded instead — that
+# stock config has no lua_shared_dict, no init_by_lua_block, no resolver,
+# no autossl plumbing. It does include /etc/nginx/conf.d/*.conf, which is
+# why the per-vhost server blocks loaded fine and the bug looked like a
+# Lua init failure rather than a missing init.
+#
+# Confirmed via:
+#   docker compose exec nginx diff \
+#     /etc/nginx/nginx.conf \
+#     /usr/local/openresty/nginx/conf/nginx.conf
+# — two completely different files. Ours had everything, theirs had none
+# of it, nginx -t reported the path it was actually parsing.
+#
+# If a future base image bump moves this path, `docker run --rm <image>
+# nginx -t` will print the real path on the first line; update accordingly.
+# conf.d/ stays at /etc/nginx/conf.d/ because the upstream nginx.conf
+# explicitly includes from there.
+COPY nginx.conf        /usr/local/openresty/nginx/conf/nginx.conf
 COPY conf.d/           /etc/nginx/conf.d/
 
 # Health check: /healthz on port 80, always unconditionally 200.

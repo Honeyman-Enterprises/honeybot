@@ -237,6 +237,26 @@ COPY --chmod=0755 scripts/secrets-init-entrypoint.sh /usr/local/bin/secrets-init
 # it explicitly. Must match the directory containing .env.schema.
 ENV PWD=/home/honeybot
 
+# ---- Build provenance ------------------------------------------------------
+# Baked into the image at build time so the running container can report
+# exactly which commit it was built from. `pull-and-restart.sh` passes these
+# as --build-arg on every rebuild; manual `docker compose build` falls back
+# to "unknown" which is intentionally noisy.
+#
+# Surfaced via:
+#   - HONEYBOT_GIT_SHA / HONEYBOT_GIT_BRANCH / HONEYBOT_BUILD_TIME env vars
+#   - /home/honeybot/.hermes/build_info.json (machine-readable)
+#   - the `version` skill (skills/version/bin/version.sh)
+ARG GIT_SHA=unknown
+ARG GIT_BRANCH=unknown
+ARG BUILD_TIME=unknown
+ENV HONEYBOT_GIT_SHA=$GIT_SHA \
+    HONEYBOT_GIT_BRANCH=$GIT_BRANCH \
+    HONEYBOT_BUILD_TIME=$BUILD_TIME
+RUN printf '{"git_sha":"%s","git_branch":"%s","build_time":"%s"}\n' \
+      "$GIT_SHA" "$GIT_BRANCH" "$BUILD_TIME" \
+      > /home/honeybot/.hermes/build_info.json
+
 # ---- Entrypoint ------------------------------------------------------------
 # On every boot:
 #   1. seed-vault.sh: idempotently ensure every 1Password item referenced

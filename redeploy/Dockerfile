@@ -9,6 +9,12 @@
 # here. No GitHub App auth needed — the repo is public, anonymous HTTPS fetch
 # works. If the repo ever goes private, wire `skills/_lib/gh-app-token.sh`
 # into watch.sh and set `git config credential.helper` accordingly.
+#
+# Secrets policy: this image deliberately has NO `op` CLI and NO 1Password
+# service-account token. Any secret it consumes (currently only the
+# optional Slack notification webhook) is materialized into /repo/.env.runtime
+# by the `secrets-init` service and loaded via env_file in compose. That
+# preserves a single op-aware boundary in the stack.
 
 FROM docker:27-cli
 

@@ -202,6 +202,28 @@ WORKDIR /home/honeybot
 # can open PRs against itself. Isolated from .hermes/ intentionally.
 RUN mkdir -p .hermes/config .hermes/skills .hermes/data workspace
 
+# ---- Model provider: Anthropic --------------------------------------------
+# Pin Hermes to Anthropic + Claude Sonnet 4.5. Upstream's default for
+# `model.provider` is "auto", which resolves through resolve_runtime_provider()
+# (see hermes_cli/runtime_provider.py) and falls back to **openrouter** when
+# nothing else matches — see cli.py around 3134 (`runtime.get("provider",
+# "openrouter")`). We don't ship an OpenRouter key, so without this override
+# every Slack message round-trips to https://openrouter.ai/api/v1 and comes
+# back as `HTTP 401: Missing Authentication header`.
+#
+# Same write-to-config durability story as the memory.provider/display lines
+# below: only .hermes/data is volume-mounted in docker-compose.yml. Anything
+# `hermes config set` writes lives at ~/.hermes/config.yaml, which is image-
+# baked, NOT in a volume. That means:
+#   - `docker compose restart honeybot`             → preserved (image unchanged)
+#   - `docker compose restart <other service>`      → preserved (we're not touched)
+#   - redeploy sidecar runs `up -d --build`         → preserved (rebakes from here)
+#   - ad-hoc `docker exec ... hermes config set`    → LOST on next rebuild
+# So this RUN is the only durable surface for provider selection. Don't
+# rely on runtime exec writes.
+RUN hermes config set model.provider anthropic \
+ && hermes config set model.name claude-sonnet-4-5
+
 # ---- Memory provider: Mem0 -------------------------------------------------
 # Select Mem0 as the long-term memory backend. The API key itself is injected
 # at container start via MEM0_API_KEY (resolved by Varlock from

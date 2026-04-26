@@ -55,10 +55,36 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Fallback: when running under the Hermes gateway, the requesting user's
+# Slack ID is captured per-message by the honeybot-identity hook
+# (hooks/honeybot-identity/handler.py) and written to a per-session
+# sidecar file keyed on $HERMES_SESSION_KEY. We read that here so skills
+# don't have to be invoked with --user every time and so we don't race
+# concurrent Slack messages on os.environ.
+#
+# Precedence (highest first):
+#   1. --user UID            (explicit, debug/admin)
+#   2. $HONEYBOT_SLACK_USER  (CLI/local-dev override in op.env)
+#   3. sidecar file          (gateway path — the production case)
+#
+# The sidecar path mirrors hooks/honeybot-identity/handler.py:
+#   /tmp/honeybot-identity/{session_key_with_colons_as_underscores}/HONEYBOT_SLACK_USER
+if [[ -z "$user_id" && -n "${HERMES_SESSION_KEY:-}" ]]; then
+  safe_key="${HERMES_SESSION_KEY//:/_}"
+  safe_key="${safe_key//\//_}"
+  sidecar="/tmp/honeybot-identity/${safe_key}/HONEYBOT_SLACK_USER"
+  if [[ -r "$sidecar" ]]; then
+    user_id="$(<"$sidecar")"
+    user_id="${user_id//[$'\t\r\n ']}"   # strip whitespace just in case
+  fi
+fi
+
 if [[ -z "$user_id" ]]; then
   cat >&2 <<'ERR'
 creds.sh: refusing to read credentials without a Slack user ID.
-         Set HONEYBOT_SLACK_USER or pass --user UID.
+         Set HONEYBOT_SLACK_USER, pass --user UID, or run under the
+         Hermes gateway with the honeybot-identity hook installed
+         (hooks/honeybot-identity/).
          This is a hard requirement of the identity model — no default user.
 ERR
   exit 2

@@ -1,0 +1,17 @@
+name: honeybot-identity
+description: |
+  Per-message hook that captures the requesting Slack user's ID from the
+  Hermes gateway's agent:start event and writes it to a per-session sidecar
+  file. Skill subprocesses (via skills/_lib/creds.sh) read the sidecar to
+  resolve which 1Password vault item to fetch credentials from, without
+  the LLM having to pass --user on every call and without racing on
+  os.environ across concurrent sessions.
+
+  This is the load-bearing piece of the per-user identity model
+  (docs/identity-model.md): without it, every skill that touches a human's
+  external service (Gmail, AWS, HubSpot) fails closed because creds.sh
+  refuses to read the vault without a user ID.
+
+events:
+  - agent:start
+  - session:end

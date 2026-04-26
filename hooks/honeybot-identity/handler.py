@@ -1,0 +1,159 @@
+"""
+honeybot-identity hook — propagate the requesting Slack user's ID into a
+per-session sidecar file that skill subprocesses can read.
+
+Why this exists
+---------------
+The Hermes gateway already knows who sent every inbound message — it has
+to, in order to enforce SLACK_ALLOWED_USERS. It exposes that ID inside the
+agent process via gateway.session_context.HERMES_SESSION_USER_ID, which is
+a ContextVar (task-local, concurrency-safe across asyncio tasks).
+
+But ContextVars don't propagate to child processes. When the agent shells
+out to a skill (e.g. ./skills/gmail/bin/gmail.sh), the subprocess inherits
+os.environ, not the gateway's contextvars. So the skill can't see the
+user ID, and creds.sh — which is the one place that's allowed to read
+op://Honeybot/{Service}-{UID}/... — has to fail closed.
+
+Setting os.environ["HONEYBOT_SLACK_USER"] from this hook would be a race
+condition under concurrent messages from different users. Instead we
+write the ID to a per-session file keyed on $HERMES_SESSION_KEY, which
+*is* exported into subprocess env. creds.sh reads that file, gets the
+user ID, builds the vault path, and proceeds.
+
+Lifecycle
+---------
+- agent:start  → ensure the sidecar file exists with the current user_id
+- session:end  → delete the sidecar file (defensive cleanup; not required
+                 for correctness because the file is keyed on session_key
+                 and gets overwritten per-message anyway)
+
+Storage
+-------
+/tmp/honeybot-identity/{session_key_safe}/HONEYBOT_SLACK_USER
+
+session_key contains colons (e.g. agent:main:slack:dm:D0AU...:ts), which
+are valid in Linux paths but ugly. We replace them with `_` for filesystem
+sanity. The mapping is one-way and stable per session, which is all
+creds.sh needs.
+
+The file is mode 0600, owned by the runtime UID. /tmp is process-private
+in the container (no host bind-mount), so it's not visible outside.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import re
+from pathlib import Path
+
+logger = logging.getLogger("hooks.honeybot-identity")
+
+IDENTITY_ROOT = Path("/tmp/honeybot-identity")
+USER_FILE_NAME = "HONEYBOT_SLACK_USER"
+
+# Slack user IDs are [UW][A-Z0-9]{8,}. We mirror the same regex that
+# skills/_lib/creds.sh uses so we never write garbage that would later
+# get rejected downstream — fail at the producer, not the consumer.
+_SLACK_UID_RE = re.compile(r"^[UW][A-Z0-9]{8,}$")
+
+
+def _safe_session_dir(session_key: str) -> Path:
+    """Map a Hermes session_key to a filesystem-safe per-session directory."""
+    # session_key format: "agent:main:slack:dm:CHANNEL_ID:THREAD_TS"
+    # Replace ":" with "_" so the path is one segment under IDENTITY_ROOT.
+    safe = session_key.replace(":", "_").replace("/", "_")
+    return IDENTITY_ROOT / safe
+
+
+def _write_user_id(session_key: str, user_id: str) -> None:
+    """Atomically write the user ID to the per-session sidecar file."""
+    session_dir = _safe_session_dir(session_key)
+    session_dir.mkdir(parents=True, exist_ok=True)
+    # Tighten perms on the directory itself (best-effort).
+    try:
+        os.chmod(session_dir, 0o700)
+    except OSError:
+        pass
+
+    target = session_dir / USER_FILE_NAME
+    tmp = target.with_suffix(".tmp")
+    tmp.write_text(user_id, encoding="utf-8")
+    os.chmod(tmp, 0o600)
+    # Atomic on POSIX — replaces target without a torn read window.
+    os.replace(tmp, target)
+
+
+def _delete_session(session_key: str) -> None:
+    """Remove the per-session sidecar (best-effort)."""
+    session_dir = _safe_session_dir(session_key)
+    target = session_dir / USER_FILE_NAME
+    try:
+        target.unlink(missing_ok=True)
+    except OSError as e:
+        logger.debug("could not unlink %s: %s", target, e)
+    try:
+        session_dir.rmdir()
+    except OSError:
+        # Non-empty or already gone — fine either way.
+        pass
+
+
+async def handle(event_type: str, context: dict) -> None:
+    """Gateway hook entrypoint.
+
+    For agent:start, persist the requesting user's Slack ID. For
+    session:end, clean up the sidecar.
+
+    Errors are logged and swallowed — this hook MUST NOT block the agent
+    pipeline. If the sidecar can't be written, downstream skills will
+    simply fail closed at creds.sh, which is the existing behavior.
+    """
+    try:
+        if event_type == "agent:start":
+            session_key = os.environ.get("HERMES_SESSION_KEY", "")
+            user_id = (context.get("user_id") or "").strip()
+
+            if not session_key:
+                logger.warning(
+                    "agent:start fired without HERMES_SESSION_KEY in env; "
+                    "skipping sidecar write"
+                )
+                return
+
+            if not user_id:
+                logger.warning(
+                    "agent:start fired without user_id in context for "
+                    "session %s; skipping sidecar write",
+                    session_key,
+                )
+                return
+
+            if not _SLACK_UID_RE.match(user_id):
+                # Non-Slack platforms (e.g. CLI, telegram) flow through the
+                # same hook because the hook listens on agent:start
+                # globally. Their user_id is not a Slack UID — that's
+                # expected and fine; we just skip.
+                logger.debug(
+                    "user_id %r is not a Slack UID; not a Slack-originated "
+                    "request, skipping",
+                    user_id,
+                )
+                return
+
+            _write_user_id(session_key, user_id)
+            logger.debug(
+                "wrote sidecar for session=%s user=%s", session_key, user_id
+            )
+
+        elif event_type == "session:end":
+            session_key = os.environ.get("HERMES_SESSION_KEY", "")
+            if not session_key:
+                return
+            _delete_session(session_key)
+            logger.debug("cleared sidecar for session=%s", session_key)
+
+    except Exception as e:
+        # Never let a hook failure abort message processing.
+        logger.error("honeybot-identity hook failed on %s: %s", event_type, e)

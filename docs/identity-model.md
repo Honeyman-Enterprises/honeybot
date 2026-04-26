@@ -63,9 +63,13 @@ Skills **MUST** refuse to run without a user ID. No default, no fallback to
 
 ## OAuth for per-user Google / AWS (no inbound port)
 
-Services that authenticate real humans use **OAuth 2.0 Device Authorization
-Grant** (RFC 8628). This is the same flow as `gh auth login`, `aws sso login`,
-and "plug TV into Netflix":
+Services that authenticate real humans use OAuth 2.0 with the user's own
+Google Cloud OAuth client. Two flows are valid; pick whichever the skill
+implements.
+
+### Flow A — Device Authorization Grant (RFC 8628), preferred long-term
+
+Same flow as `gh auth login`, `aws sso login`, and "plug TV into Netflix":
 
 1. User DMs: `connect gmail`
 2. Bot hits Google's device-authz endpoint → gets `device_code`, `user_code`,
@@ -79,8 +83,28 @@ and "plug TV into Netflix":
 5. Bot writes `refresh_token` to `op://Honeybot/Gmail-{UID}/refresh_token`.
    The short-lived access token is never stored — refreshed on demand.
 
-No callback URL, no port forwarding, no ngrok. Works identically on your
-laptop and on the EC2 instance.
+No callback URL, no port forwarding, no ngrok. Requires the user to enable
+"TVs and Limited Input devices" client type in their Google Cloud project.
+
+### Flow B — Loopback redirect (Desktop OAuth client), used by v0.1 `gmail` skill
+
+Reuses the standard Desktop OAuth client type that everyone already has from
+the `google-workspace` setup:
+
+1. User DMs: `connect gmail`
+2. Bot generates an auth URL pointing at `redirect_uri=http://localhost:1`,
+   DMs it.
+3. User opens URL → Google consent screen → approves → browser redirects
+   to `http://localhost:1/?code=4/0A...` and shows a connection-refused
+   page. That's expected: there is no local server.
+4. User pastes the entire failed-load URL back into Slack DM.
+5. Bot extracts `?code=` and exchanges it server-side at
+   `https://oauth2.googleapis.com/token` for `access_token` + `refresh_token`.
+6. Bot writes `refresh_token` to `op://Honeybot/Gmail-{UID}/refresh_token`.
+
+Slightly more user steps than Flow A (one paste-back), but doesn't require
+the user to set up a second Google Cloud client type. v0.2 can migrate to
+Flow A once we want to optimize the connect UX.
 
 ### Scope hygiene
 

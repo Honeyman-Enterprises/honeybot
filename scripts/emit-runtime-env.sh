@@ -77,20 +77,6 @@ read_or_silent() {
 ELASTIC_PASSWORD="$(read_or_warn 'op://Honeybot/Elasticsearch/password')"
 NEO4J_AUTH="$(read_or_warn 'op://Honeybot/Neo4j/auth')"
 
-# Optional: Slack incoming webhook URL for the redeploy sidecar's
-# success/failure notifications. Stored in 1Password (NOT in op.env) so
-# it's rotatable through the same flow as every other bot-level secret,
-# and so the lightweight redeploy sidecar — which has no `op` CLI and no
-# service-account token — never sees the raw URL in its compose env.
-#
-# Vault item: op://Honeybot/Slack Bot/redeploy_webhook_url
-# Empty/missing → notifications disabled (silent, legacy behavior).
-#
-# This is a soft secret: incoming webhooks can post to one channel only,
-# can't read anything, and revoking is one click in the Slack app config.
-# Still treat it like a secret — never log it, never echo it.
-REDEPLOY_NOTIFY_WEBHOOK="$(read_or_silent 'op://Honeybot/Slack Bot/redeploy_webhook_url')"
-
 # Write atomically so partial writes can't confuse compose. Empty values
 # are emitted as `KEY=` so compose's env_file parser doesn't choke; the
 # downstream container sees an empty env var and fails its own startup
@@ -101,7 +87,6 @@ umask 077
   printf '# Regenerated on every compose up via the secrets-init service.\n'
   printf 'ELASTIC_PASSWORD=%s\n' "$ELASTIC_PASSWORD"
   printf 'NEO4J_AUTH=%s\n' "$NEO4J_AUTH"
-  printf 'HONEYBOT_REDEPLOY_NOTIFY_WEBHOOK=%s\n' "$REDEPLOY_NOTIFY_WEBHOOK"
 } > "$TMP"
 mv "$TMP" "$OUT"
 chmod 600 "$OUT"

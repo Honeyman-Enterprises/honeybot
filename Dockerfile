@@ -211,6 +211,21 @@ RUN mkdir -p .hermes/config .hermes/skills .hermes/data workspace
 # Idempotent; safe across image rebuilds.
 RUN hermes config set memory.provider mem0
 
+# ---- Display: silence inter-tool commentary -------------------------------
+# Hermes' default behavior on chat platforms is to surface the assistant's
+# natural-language preamble between tool calls (e.g. "Let me check the
+# config first.") as separate Slack messages — see
+# gateway/stream_consumer.py::_send_commentary and gateway/run.py around the
+# `interim_assistant_messages_enabled` resolution. The default is True, which
+# spams the channel with "thinking out loud" lines that aren't the actual
+# answer. Turning it off keeps the channel clean: only the final response
+# (and tool-progress edits, if enabled) gets posted. The user can still see
+# everything via `hermes logs`.
+#
+# Same write-to-config rationale as memory.provider above: only .hermes/data
+# is volume-mounted, so config is baked in at image build time.
+RUN hermes config set display.interim_assistant_messages false
+
 COPY --chown=honeybot:honeybot skills/         ./.hermes/skills/
 # Per-message gateway hooks. honeybot-identity in particular is load-bearing
 # for the per-user identity model: it captures the requesting Slack user's

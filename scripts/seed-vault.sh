@@ -170,4 +170,26 @@ ensure_item "Honcho" "API Credential" \
   'api_key[password]=' \
   'base_url[text]='
 
+# ---------------------------------------------------------------------------
+# HermesAPI — bearer key for the Hermes OpenAI-compatible API server.
+# ---------------------------------------------------------------------------
+# Auto-generated on first creation. The honeybot container reads this via
+# API_SERVER_KEY (varlock) and refuses unauthenticated requests at /v1/*.
+# Open WebUI (and any other OpenAI-compatible client we add) presents this
+# as the Bearer token; container-to-container traffic is on honeynet so
+# even pre-auth the surface is small, but we key-gate anyway.
+ensure_item "HermesAPI" "API Credential" \
+  "key[password]=$(gen_pw 32)"
+
+# ---------------------------------------------------------------------------
+# OpenWebUI — secret key for signing its session cookies / JWTs.
+# ---------------------------------------------------------------------------
+# Open WebUI bakes WEBUI_SECRET_KEY into the JWT signing it uses for its
+# own user-account auth (separate from the Hermes API key above — Open
+# WebUI has its own multi-user accounts on top of the upstream model).
+# Generated once; rotating it logs every Open WebUI user out, so do that
+# deliberately, not casually.
+ensure_item "OpenWebUI" "API Credential" \
+  "secret_key[password]=$(gen_pw 48)"
+
 log "done"

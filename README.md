@@ -127,6 +127,30 @@ The bot will:
 3. Store the key directly in 1Password (never on disk, never logged).
 4. Run `hs auth` and confirm the portal name.
 
+### 6. Web UI (Open WebUI)
+
+After `docker compose up -d` brings the stack online, the web frontend
+is available at <https://honeybot.honeymanenterprises.com>. It's a
+ChatGPT-style interface: chat history on the left, project workspaces,
+file uploads with code rendering, multi-model support — all backed by
+the same Hermes agent that runs in Slack.
+
+First sign-up at that URL becomes the local admin. After your account
+is created, lock the door behind you:
+
+```yaml
+# docker-compose.yml, openwebui service
+ENABLE_SIGNUP: "false"
+```
+
+…then `docker compose up -d openwebui` to reload.
+
+Open WebUI keeps its own user database (under the `openwebui-data`
+volume) separate from the Slack allowlist. The two front doors share
+one Hermes brain via the `api_server` gateway adapter on port 8642
+(internal only — never exposed to the host). See
+[`docs/phase-2-webui.md`](docs/phase-2-webui.md) for the full topology.
+
 ---
 
 ## Safety model
@@ -169,9 +193,10 @@ honeybot/
 | Version | Scope                                                         |
 |---------|---------------------------------------------------------------|
 | v1      | HubSpot CLI install + auth via Slack DM                       |
-| v2      | HubSpot CRM read (contacts, companies, deals)                 |
-| v3      | HubSpot CRM write (create/update) with Slack confirmation UX  |
-| v4      | HubSpot workflow / pipeline actions, gated by allowlist       |
+| v2      | Web UI (Open WebUI) on https://honeybot.honeymanenterprises.com |
+| v3      | HubSpot CRM read (contacts, companies, deals)                 |
+| v4      | HubSpot CRM write (create/update) with Slack confirmation UX  |
+| v5      | HubSpot workflow / pipeline actions, gated by allowlist       |
 | later   | Additional CLIs as Michelle needs them (same skill pattern)   |
 
 ## Open items (see plan, "Open Risks / Decisions to Revisit")

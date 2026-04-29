@@ -302,8 +302,20 @@ services:
     restart: unless-stopped
 
     ports:
-      - "80:80"
-      - "443:443"
+      # 80→8080, 443→4433. The host (Mac) does WAN port-forwarding from
+      # router :443 → Mac :4433 and :80 → Mac :8080, so the public-facing
+      # URLs stay https://honeybot.honeymanenterprises.com (no :4433 in
+      # the URL). The :8080 path exists only for lua-resty-acme HTTP-01
+      # challenges + redirect-to-HTTPS, never for app traffic. Pick high
+      # ports here (4433/8080) so the Mac itself is free to run other
+      # things on 80/443 if it ever needs to.
+      #
+      # If you redeploy onto a host where you DO want nginx on 80/443
+      # directly (e.g. an EC2 box that does nothing else), override this
+      # block in a compose overlay rather than editing in place — that's
+      # what docker-compose.prod.yml is for.
+      - "8080:80"
+      - "4433:443"
 
     environment:
       # Contact email on the ACME account. LE uses this only for
@@ -329,6 +341,106 @@ services:
       driver: json-file
       options:
         max-size: "5m"
+        max-file: "3"
+
+    networks: [honeynet]
+
+  # ---------------------------------------------------------------------
+  # openwebui — chat frontend for the Hermes api_server adapter.
+  # ---------------------------------------------------------------------
+  # User-facing web app served at https://honeybot.honeymanenterprises.com/
+  # (nginx terminates TLS and proxies / → openwebui:8080). Speaks the
+  # OpenAI-compatible API to honeybot:8642 over honeynet.
+  #
+  # Open WebUI runs ITS OWN user-account database in /app/backend/data on
+  # the openwebui-data volume. First signup becomes the local admin.
+  # That's separate from the Slack allowlist — Slack auth gates the bot
+  # via Socket Mode; this gates the web app via Open WebUI's own login.
+  # Once the admin account exists, flip ENABLE_SIGNUP=false here and
+  # re-up the container if you don't want strangers creating accounts.
+  #
+  # Why no `ports:` mapping — only nginx is the public surface. Putting
+  # 3000 or 8080 on the host would bypass TLS and the autossl whitelist.
+  #
+  # Resources: Open WebUI is React + a Python/FastAPI backend. Idle is
+  # ~150MB; under load with a few users open it's well under 1GB. Cap
+  # at 1GB to leave headroom on the t4g.small / Mac sharing memory.
+  openwebui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: honeybot-openwebui
+    restart: unless-stopped
+
+    # Wait on secrets-init for varlock-resolved env, and on honeybot
+    # itself so the api_server is reachable when Open WebUI's first
+    # health probe fires.
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+      honeybot:
+        condition: service_started
+
+    env_file:
+      # Reads OPENWEBUI_SECRET_KEY + API_SERVER_KEY (Hermes bearer) from
+      # .env.runtime, written by secrets-init via varlock at boot.
+      - path: ./.env.runtime
+        required: false
+
+    environment:
+      # ---- Hermes wiring -----------------------------------------------
+      # Speak OpenAI to the api_server adapter on the honeybot container.
+      # `host.docker.internal` doesn't work on Linux without a workaround;
+      # use the service name on honeynet instead.
+      OPENAI_API_BASE_URL: http://honeybot:8642/v1
+      # OPENAI_API_KEY is sourced from .env.runtime → API_SERVER_KEY.
+      # Open WebUI doesn't have a separate OPENAI_API_KEY env knob that
+      # accepts indirection, so we copy it through. The varlock-resolved
+      # value is what lands in container env; never logged, never on host.
+      OPENAI_API_KEY: ${API_SERVER_KEY:-from-env-file}
+
+      # Suppress Open WebUI's auto-discovery of Ollama (we don't run it).
+      # Without this, the dashboard renders an "Ollama unreachable" banner
+      # on every page load.
+      ENABLE_OLLAMA_API: "false"
+
+      # ---- Auth / sessions --------------------------------------------
+      # Signs Open WebUI's own session JWTs (NOT the Hermes API key).
+      # Sourced from .env.runtime → OPENWEBUI_SECRET_KEY.
+      WEBUI_SECRET_KEY: ${OPENWEBUI_SECRET_KEY:-from-env-file}
+
+      # First signup becomes admin. After you've created your account,
+      # flip to "false" and re-up the container to lock down the URL:
+      #   ENABLE_SIGNUP: "false"
+      # Leaving it true while Honeybot is single-user is fine; just be
+      # aware the URL is public the moment DNS + nginx + cert resolve.
+      ENABLE_SIGNUP: "true"
+
+      # Default new accounts to "user" (not "admin"). Only the first
+      # signup gets admin regardless of this setting.
+      DEFAULT_USER_ROLE: "user"
+
+      # ---- App URL / behind-proxy hints --------------------------------
+      # Open WebUI uses WEBUI_URL for password-reset links, OAuth
+      # callbacks, and websocket origin checks. Must match the public
+      # URL nginx serves on, NOT the internal honeynet name.
+      WEBUI_URL: "https://honeybot.honeymanenterprises.com"
+
+      # Trust the X-Forwarded-* headers nginx sets so server-rendered
+      # links use https:// and the right host instead of http://openwebui:8080.
+      WEBUI_AUTH_TRUSTED_EMAIL_HEADER: ""
+
+    volumes:
+      # User accounts, chat history, RAG documents, etc. The "project
+      # context and history on the left" panel writes here. Persists
+      # across image bumps.
+      - openwebui-data:/app/backend/data
+
+    mem_limit: 1024m
+    memswap_limit: 1024m
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
         max-file: "3"
 
     networks: [honeynet]
@@ -464,6 +576,12 @@ volumes:
   elasticsearch-data:
   neo4j-data:
   neo4j-logs:
+  # Open WebUI's per-user data: accounts, chat history, RAG knowledge
+  # bases, uploaded files. SQLite + filesystem under /app/backend/data.
+  # Losing it logs every Open WebUI user out and wipes their chats —
+  # but does NOT touch any Hermes data (sessions, memory, skills) which
+  # live on honeybot-data above.
+  openwebui-data:
   # Issued TLS certs + ACME account keys for lua-resty-acme. Survives
   # container restarts; losing it forces LE re-issuance on next
   # handshake per whitelisted domain.

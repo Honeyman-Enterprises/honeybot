@@ -77,6 +77,23 @@ read_or_silent() {
 ELASTIC_PASSWORD="$(read_or_warn 'op://Honeybot/Elasticsearch/password')"
 NEO4J_AUTH="$(read_or_warn 'op://Honeybot/Neo4j/auth')"
 
+# SMTP — consumed by the openwebui service for password-reset / email
+# verification flows (and any future surface that wants to send mail; see
+# skills/honeybot-dev/references/smtp-plan.md). Open WebUI is not Varlock-
+# aware, so its SMTP envs come through .env.runtime via env_file rather
+# than via varlock-resolved process env. read_or_warn so a missing SMTP
+# entry in the vault degrades to "no outbound mail" instead of taking
+# secrets-init down — the Open WebUI container will boot, just without
+# functional email. Same fail-soft posture as ES/Neo4j above.
+SMTP_HOST="$(read_or_warn 'op://Honeybot/SMTP/host')"
+SMTP_PORT="$(read_or_warn 'op://Honeybot/SMTP/port')"
+SMTP_USERNAME="$(read_or_warn 'op://Honeybot/SMTP/username')"
+SMTP_PASSWORD="$(read_or_warn 'op://Honeybot/SMTP/app_password')"
+SMTP_MAIL_FROM="$(read_or_warn 'op://Honeybot/SMTP/mail_from')"
+# Display name is purely cosmetic — silent if missing, defaults applied
+# downstream in docker-compose.yml.
+SMTP_MAIL_FROM_NAME="$(read_or_silent 'op://Honeybot/SMTP/mail_from_name')"
+
 # Write atomically so partial writes can't confuse compose. Empty values
 # are emitted as `KEY=` so compose's env_file parser doesn't choke; the
 # downstream container sees an empty env var and fails its own startup
@@ -87,6 +104,12 @@ umask 077
   printf '# Regenerated on every compose up via the secrets-init service.\n'
   printf 'ELASTIC_PASSWORD=%s\n' "$ELASTIC_PASSWORD"
   printf 'NEO4J_AUTH=%s\n' "$NEO4J_AUTH"
+  printf 'SMTP_HOST=%s\n' "$SMTP_HOST"
+  printf 'SMTP_PORT=%s\n' "$SMTP_PORT"
+  printf 'SMTP_USERNAME=%s\n' "$SMTP_USERNAME"
+  printf 'SMTP_PASSWORD=%s\n' "$SMTP_PASSWORD"
+  printf 'SMTP_MAIL_FROM=%s\n' "$SMTP_MAIL_FROM"
+  printf 'SMTP_MAIL_FROM_NAME=%s\n' "$SMTP_MAIL_FROM_NAME"
 } > "$TMP"
 mv "$TMP" "$OUT"
 chmod 600 "$OUT"

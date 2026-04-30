@@ -182,19 +182,25 @@ ensure_item "HermesAPI" "API Credential" \
   "key[password]=$(gen_pw 32)"
 
 # ---------------------------------------------------------------------------
-# SMTP — Workspace relay for outbound mail (Open WebUI password reset /
-# email verification). All fields default empty: a missing real config
-# leaves Open WebUI's SMTP path inert (email verification toggle in
-# docker-compose.yml is the on/off switch) but does NOT block the bot
-# from booting. Fill in via the 1Password UI when you're ready to enable
-# outbound mail; design rationale + Workspace setup steps live at
-# skills/honeybot-dev/references/smtp-plan.md.
+# SMTP — outbound mail relay for honeybot. Primary use case is the
+# cross-provider identity-linking flow: when a user attaches a new auth
+# provider (Google, GitHub, Microsoft, …) to their unified profile, the
+# system sends a one-time link to the email that provider asserted, to
+# prove the human controls that inbox. Open WebUI's password-reset path
+# is a downstream consumer of the same relay, not the reason it exists.
+# Full design + L0–L3 contract lives at docs/email-verification.md.
 #
-# Backend choice on first use: smtp-relay.gmail.com:587 (STARTTLS), with
+# All fields default empty. send_email.send() raises SMTPNotConfigured
+# when any required field is empty, and every consumer is required to
+# handle that as "feature off" — bot itself boots fine without SMTP.
+# Fill in via the 1Password UI when you're ready to enable outbound
+# mail; the Workspace Admin Console click-path is in the design doc.
+#
+# First-use backend: smtp-relay.gmail.com:587 (STARTTLS), with
 # `username` = a Workspace user that has 2-Step on, `app_password` = an
 # app-specific password generated for that user, `mail_from` = the
 # noreply@ address (does NOT need to be a real Workspace mailbox — the
-# relay accepts any From: in our domains).
+# relay accepts any From: in our verified domains).
 # ---------------------------------------------------------------------------
 ensure_item "SMTP" "API Credential" \
   'host[text]=' \

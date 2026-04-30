@@ -226,35 +226,161 @@ write the result.
   single-field input. If you start composing raw RFC822 by hand, stop
   and use the helper.
 
-## SMTP relay setup (one-time, manual)
+## SMTP relay setup (AWS SES, one-time, manual)
 
 The bot doesn't try to provision the relay automatically — same posture
-as 1Password vault creation, which is a human decision.
+as 1Password vault creation, which is a human decision. Backend is
+**AWS SES SMTP**, region `us-east-1` (matches `AWS_DEFAULT_REGION`
+in `scripts/seed-vault.sh`). All clicks below assume `us-east-1`.
 
-1. In the Workspace Admin Console, enable the SMTP relay service:
-   Apps → Google Workspace → Gmail → Routing → SMTP relay service →
-   Add: Allowed senders = "Only registered Apps users in my domains",
-   Authentication = "Require SMTP auth".
-2. Pick (or create) a Workspace user that the bot will authenticate as.
-   2-Step Verification must be ON for that user.
-3. Sign in as that user → Account → Security → 2-Step Verification →
-   App passwords → generate one for "Mail" / "Other (honeybot SMTP)".
-   Copy the 16-char password.
-4. In 1Password, edit the `SMTP` item in the `Honeybot` vault:
-   - `host` = `smtp-relay.gmail.com`
-   - `port` = `587`
-   - `username` = the Workspace user from step 2
-   - `app_password` = the 16-char value from step 3
-   - `mail_from` = `noreply@<your-domain>` (does NOT need to be a real
-     mailbox — relay accepts any From: in your verified domains)
-   - `mail_from_name` = whatever display name you want, e.g. `Honeybot`
-5. `docker compose restart honeybot` (or wait for the redeploy sidecar's
-   next poll). Varlock re-reads SMTP_* on container start.
+### Step 1 — Verify the domain identity
+
+`AWS Console` → SES → confirm region `us-east-1` top-right.
+
+1. **Configuration → Verified identities → Create identity**
+2. Identity type: **Domain**, value: `honeymanenterprises.com`
+3. ✅ **Use a custom MAIL FROM domain**:
+   - MAIL FROM domain: `mail.honeymanenterprises.com`
+   - Behavior on MX failure: `Use default MAIL FROM domain`
+   - Why: bounces come from a subdomain so the apex stays DMARC-aligned
+     and silent on the bounce path.
+4. **DKIM**: ✅ Easy DKIM, RSA 2048-BIT.
+5. ✅ **Publish DNS records to Route 53** (Route 53 hosts our zone, so
+   SES publishes the records itself — three DKIM CNAMEs, one MAIL FROM
+   MX, one MAIL FROM SPF TXT — auto-rolled into the hosted zone).
+6. **Create identity**.
+
+Watch the identity detail page: **DKIM configuration** flips from
+`Pending` → `Successful` (usually <5 min). MAIL FROM also goes
+`Successful` once the MX/SPF records propagate.
+
+### Step 2 — Verify (or add) the apex SPF + DMARC records
+
+SES auto-handles SPF for the *bounce* subdomain. The *apex* domain
+still needs SPF (so SES is authorized to send) and a DMARC policy.
+
+```bash
+dig +short TXT honeymanenterprises.com   | tr -d '"' | grep -i spf1
+dig +short TXT _dmarc.honeymanenterprises.com | tr -d '"'
+```
+
+You want:
+
+| Record | Value |
+|---|---|
+| `TXT honeymanenterprises.com` | `v=spf1 include:amazonses.com ~all` (merge `include:`s if other senders exist; never publish two SPF records) |
+| `TXT _dmarc.honeymanenterprises.com` | `v=DMARC1; p=none; rua=mailto:postmaster@honeymanenterprises.com; aspf=r; adkim=r` |
+
+Add via Route 53 console or CLI. DMARC `p=none` is monitor-only; tighten
+to `quarantine` or `reject` later after watching aggregate reports.
+
+### Step 3 — Move out of sandbox
+
+By default SES can only send TO verified addresses. Production access
+lifts that.
+
+SES Console → top of page → **Request production access**:
+- Mail type: **Transactional**
+- Website URL: `https://honeybot.honeymanenterprises.com`
+- Use case: paste the canonical description from the linking flow:
+
+  > Honeybot is an internal Slack-fronted assistant for Honeyman
+  > Enterprises. We use SES exclusively for transactional verification
+  > mail: when a user attaches a new auth provider (Google, GitHub,
+  > Microsoft) to their unified Honeybot profile, we send a one-time
+  > link to the email address that provider asserted, so the user can
+  > prove they control that inbox. Recipients have all initiated the
+  > linking action themselves; we never send marketing or unsolicited
+  > mail. Estimated volume: <500 messages/month, transactional only.
+
+Approval is usually <24h. You can finish the rest of the wiring while
+the request bakes — sandbox mode is enough to smoke-test against any
+verified email.
+
+### Step 4 — Generate SES SMTP credentials
+
+SES Console → left nav → **SMTP settings**.
+
+1. Note the SMTP endpoint: `email-smtp.us-east-1.amazonaws.com`, port 587.
+2. **Create SMTP credentials**:
+   - IAM user name: `honeybot-ses-smtp`
+   - Click **Create user**.
+3. **Download credentials** (CSV) — the SMTP user/password is shown
+   exactly once. Same one-shot convention as Google's app passwords.
+
+Behind the scenes AWS just:
+- Created an IAM user `honeybot-ses-smtp`
+- Attached `AmazonSesSendingAccess` (only `ses:SendRawEmail`)
+- Generated an IAM access key
+- Derived an SMTP password from the secret via the documented SigV4
+  algorithm
+
+The SMTP credentials are NOT the IAM access key/secret — only the
+SMTP user and password go to honeybot.
+
+### Step 5 — Populate the `SMTP` item in 1Password
+
+In the **Honeybot** vault, open the **SMTP** item (auto-created as a
+placeholder by `scripts/seed-vault.sh`). Set:
+
+| Field | Value |
+|---|---|
+| `host` | `email-smtp.us-east-1.amazonaws.com` |
+| `port` | `587` |
+| `username` | SMTP user from step 4 (looks like `AKIA…`) |
+| `app_password` | SMTP password from step 4 (mixed-case, sensitive) |
+| `mail_from` | `noreply@honeymanenterprises.com` |
+| `mail_from_name` | `Honeybot` |
+
+Save. The `op` CLI picks up new fields immediately on next read; no
+vault-side propagation delay.
+
+### Step 6 — Reload + smoke
+
+```bash
+docker compose restart honeybot
+docker compose logs -f honeybot 2>&1 | head -30
+```
+
+Smoke (sandbox-safe to any verified address until production access
+lands):
+
+```bash
+docker exec honeybot bash -lc \
+  'python3 /home/honeybot/.hermes/skills/_lib/send_email.py \
+     --to YOUR_VERIFIED_EMAIL@example.com \
+     --subject "honeybot SES smoke test" \
+     --body "If you see this, SES → Honeybot is wired."'
+```
+
+Verify in the recipient's mail (Gmail's "Show original"):
+- ✅ `SPF: PASS` (bounces via `mail.honeymanenterprises.com`)
+- ✅ `DKIM: PASS` with `d=honeymanenterprises.com`
+- ✅ `DMARC: PASS`
+
+If DMARC fails on alignment, check the SES identity → MAIL FROM section:
+the bounce subdomain status must be `Successful`.
+
+### Common SES failure modes
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `554 Email address is not verified` | Sandbox mode; recipient unverified | Verify the recipient in SES, or wait for production access |
+| `535 Authentication Credentials Invalid` | Used IAM access key as SMTP creds | Re-do step 4; SMTP creds ≠ IAM keys |
+| `554 Local addresses…` | Domain identity not yet `Verified` | Watch SES identity page; DKIM must be `Successful` |
+| Mail arrives, DMARC `FAIL: DKIM aligned=no` | Custom MAIL FROM misalignment | SES → identity → MAIL FROM → status must be `Successful` |
+| Stuck `Pending verification` >30 min | Route 53 publish failed (e.g. CAA conflict) | SES → identity → Authentication tab shows the actual failure |
+
+### Rotation
+
+Rotate the SMTP password by going back to step 4 and clicking
+**Reset SMTP credentials** on the existing IAM user. Update the
+`app_password` field in 1Password. Restart honeybot. Old credentials
+are revoked atomically by SES — no overlap window to manage.
 
 The seed script (`scripts/seed-vault.sh`) creates the placeholder item
-on first boot but never overwrites filled values, so you can repeat the
-1Password edits whenever you rotate the app password without code
-changes.
+on first boot but never overwrites filled values, so 1Password edits
+survive any number of redeploys.
 
 ## Local development
 

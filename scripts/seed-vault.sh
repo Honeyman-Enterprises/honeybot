@@ -194,13 +194,18 @@ ensure_item "HermesAPI" "API Credential" \
 # when any required field is empty, and every consumer is required to
 # handle that as "feature off" — bot itself boots fine without SMTP.
 # Fill in via the 1Password UI when you're ready to enable outbound
-# mail; the Workspace Admin Console click-path is in the design doc.
+# mail; the SES Console click-path is in the design doc.
 #
-# First-use backend: smtp-relay.gmail.com:587 (STARTTLS), with
-# `username` = a Workspace user that has 2-Step on, `app_password` = an
-# app-specific password generated for that user, `mail_from` = the
-# noreply@ address (does NOT need to be a real Workspace mailbox — the
-# relay accepts any From: in our verified domains).
+# Backend: AWS SES SMTP. Fill from the SES Console after verifying the
+# domain identity and generating SMTP credentials:
+#   `host`           = email-smtp.us-east-1.amazonaws.com
+#   `port`           = 587  (STARTTLS)
+#   `username`       = SES SMTP user (NOT an IAM access key — derived
+#                      via SES Console "Create SMTP credentials")
+#   `app_password`   = SES SMTP password (same dialog)
+#   `mail_from`      = noreply@honeymanenterprises.com (any address in
+#                      a verified domain works; doesn't need a mailbox)
+#   `mail_from_name` = display name, e.g. "Honeybot"
 # ---------------------------------------------------------------------------
 ensure_item "SMTP" "API Credential" \
   'host[text]=' \

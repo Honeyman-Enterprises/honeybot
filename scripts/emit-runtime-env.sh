@@ -77,6 +77,40 @@ read_or_silent() {
 ELASTIC_PASSWORD="$(read_or_warn 'op://Honeybot/Elasticsearch/password')"
 NEO4J_AUTH="$(read_or_warn 'op://Honeybot/Neo4j/auth')"
 
+# Open WebUI session signing key + the bearer Open WebUI uses to call
+# Hermes' api_server. Both are referenced in docker-compose.yml's openwebui
+# service block as ${OPENWEBUI_SECRET_KEY:-from-env-file} and
+# ${API_SERVER_KEY:-from-env-file} — the `:-from-env-file` defaults are
+# placeholders that ONLY hold up if this script actually populates them.
+# Without these reads, openwebui boots with the literal string
+# "from-env-file" as both its session signer and its bearer to Hermes,
+# which means (a) every restart invalidates every Open WebUI session and
+# (b) Hermes' api_server rejects every request from openwebui because the
+# bearer doesn't match API_SERVER_KEY in the honeybot container.
+#
+# Fail-soft (read_or_warn): if these are missing in 1Password, openwebui
+# will still boot but won't function — surfaces the misconfiguration in
+# the secrets-init log instead of taking the whole stack down at boot.
+OPENWEBUI_SECRET_KEY="$(read_or_warn 'op://Honeybot/OpenWebUI/secret_key')"
+API_SERVER_KEY="$(read_or_warn 'op://Honeybot/HermesAPI/key')"
+
+# SMTP — consumed by the openwebui service for password-reset / email
+# verification flows (and any future surface that wants to send mail; see
+# skills/honeybot-dev/references/smtp-plan.md). Open WebUI is not Varlock-
+# aware, so its SMTP envs come through .env.runtime via env_file rather
+# than via varlock-resolved process env. read_or_warn so a missing SMTP
+# entry in the vault degrades to "no outbound mail" instead of taking
+# secrets-init down — the Open WebUI container will boot, just without
+# functional email. Same fail-soft posture as ES/Neo4j above.
+SMTP_HOST="$(read_or_warn 'op://Honeybot/SMTP/host')"
+SMTP_PORT="$(read_or_warn 'op://Honeybot/SMTP/port')"
+SMTP_USERNAME="$(read_or_warn 'op://Honeybot/SMTP/username')"
+SMTP_PASSWORD="$(read_or_warn 'op://Honeybot/SMTP/app_password')"
+SMTP_MAIL_FROM="$(read_or_warn 'op://Honeybot/SMTP/mail_from')"
+# Display name is purely cosmetic — silent if missing, defaults applied
+# downstream in docker-compose.yml.
+SMTP_MAIL_FROM_NAME="$(read_or_silent 'op://Honeybot/SMTP/mail_from_name')"
+
 # Write atomically so partial writes can't confuse compose. Empty values
 # are emitted as `KEY=` so compose's env_file parser doesn't choke; the
 # downstream container sees an empty env var and fails its own startup
@@ -87,6 +121,14 @@ umask 077
   printf '# Regenerated on every compose up via the secrets-init service.\n'
   printf 'ELASTIC_PASSWORD=%s\n' "$ELASTIC_PASSWORD"
   printf 'NEO4J_AUTH=%s\n' "$NEO4J_AUTH"
+  printf 'OPENWEBUI_SECRET_KEY=%s\n' "$OPENWEBUI_SECRET_KEY"
+  printf 'API_SERVER_KEY=%s\n' "$API_SERVER_KEY"
+  printf 'SMTP_HOST=%s\n' "$SMTP_HOST"
+  printf 'SMTP_PORT=%s\n' "$SMTP_PORT"
+  printf 'SMTP_USERNAME=%s\n' "$SMTP_USERNAME"
+  printf 'SMTP_PASSWORD=%s\n' "$SMTP_PASSWORD"
+  printf 'SMTP_MAIL_FROM=%s\n' "$SMTP_MAIL_FROM"
+  printf 'SMTP_MAIL_FROM_NAME=%s\n' "$SMTP_MAIL_FROM_NAME"
 } > "$TMP"
 mv "$TMP" "$OUT"
 chmod 600 "$OUT"

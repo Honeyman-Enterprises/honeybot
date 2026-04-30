@@ -428,6 +428,44 @@ services:
       # links use https:// and the right host instead of http://openwebui:8080.
       WEBUI_AUTH_TRUSTED_EMAIL_HEADER: ""
 
+      # ---- SMTP (outbound mail) ----------------------------------------
+      # Open WebUI uses these to send password-reset links and account-
+      # verification emails. Backend is Google Workspace SMTP relay; full
+      # design rationale + 1Password layout in
+      # skills/honeybot-dev/references/smtp-plan.md.
+      #
+      # All five core SMTP_* values come from .env.runtime (emitted by
+      # secrets-init from 1Password). They're empty assignments on a
+      # cold/un-provisioned host — Open WebUI then fails its outbound
+      # send paths individually rather than refusing to boot, which is
+      # the right posture (the chat surface should still work without
+      # functional email).
+      #
+      # SMTP_USE_TLS=true is hardcoded — Workspace relay rejects
+      # plaintext, and we never want to negotiate downward. If a future
+      # backend (SES, Postmark, ...) needs SMTPS-on-465 instead of
+      # STARTTLS-on-587, switch the relevant Open WebUI env name (some
+      # forks expose SMTP_SSL) — don't disable TLS to make plaintext work.
+      SMTP_HOST:       ${SMTP_HOST:-}
+      SMTP_PORT:       ${SMTP_PORT:-587}
+      SMTP_USERNAME:   ${SMTP_USERNAME:-}
+      SMTP_PASSWORD:   ${SMTP_PASSWORD:-}
+      SMTP_FROM_EMAIL: ${SMTP_MAIL_FROM:-}
+      SMTP_FROM_NAME:  ${SMTP_MAIL_FROM_NAME:-Honeybot}
+      SMTP_USE_TLS:    "true"
+
+      # Email verification on signup. Set true once SMTP is provisioned in
+      # 1Password (op://Honeybot/SMTP/*) — see smtp-plan.md for the
+      # Workspace Admin Console click-path. Until then, leave this false:
+      # turning it on without working SMTP would lock new users out of
+      # their own freshly-created accounts (signup succeeds, verification
+      # email never arrives, account stays in "pending" state forever).
+      #
+      # Eric: flip this to "true" the moment your first successful
+      # smtp-smoke.sh run goes through. This PR ships the wiring, NOT the
+      # flip, on purpose.
+      ENABLE_EMAIL_VERIFICATION: "false"
+
     volumes:
       # User accounts, chat history, RAG documents, etc. The "project
       # context and history on the left" panel writes here. Persists

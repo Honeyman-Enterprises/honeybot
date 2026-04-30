@@ -221,8 +221,32 @@ RUN mkdir -p .hermes/config .hermes/skills .hermes/data workspace
 #   - ad-hoc `docker exec ... hermes config set`    → LOST on next rebuild
 # So this RUN is the only durable surface for provider selection. Don't
 # rely on runtime exec writes.
+#
+# We write the chosen model to BOTH `model.name` and `model.default`. This
+# is deliberate, not redundant:
+#
+#   * `model.name` — what `hermes config set model.name X` writes and what
+#     the CLI/agent loop (run_agent.AIAgent) reads via load_cli_config().
+#     This is the path the Slack platform uses, and it works fine.
+#
+#   * `model.default` — what gateway/run.py:_resolve_gateway_model() reads
+#     when spawning agents for the api_server platform (the OpenAI-shaped
+#     endpoint Open WebUI talks to). That resolver does NOT consult
+#     `model.name`; if `default` is empty, every Open WebUI request goes
+#     out the door with `"model": ""` and Anthropic rejects it as
+#     "model: String should have at least 1 character". The auth client
+#     never gets initialized after that and the request_dump shows
+#     `Authorization: Bearer None` as a knock-on, which looks like a
+#     credentials problem but isn't — it's the same root cause.
+#
+# Setting both here is the workaround. See
+# skills/honeybot-dev/references/upstream-hermes-bugs.md for the full
+# diagnostic chain and the in-tree patch we'll eventually apply to
+# /opt/hermes/gateway/run.py to make `model.name` authoritative for the
+# gateway path too.
 RUN hermes config set model.provider anthropic \
- && hermes config set model.name claude-sonnet-4-5
+ && hermes config set model.name claude-opus-4-6 \
+ && hermes config set model.default claude-opus-4-6
 
 # ---- Memory provider: Mem0 -------------------------------------------------
 # Select Mem0 as the long-term memory backend. The API key itself is injected

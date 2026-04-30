@@ -220,3 +220,19 @@ Reports: "Opened PR #47: https://github.com/honeyman/honeybot/pull/47 — ready 
 - Rebasing / squashing history.
 - Cherry-picking across branches.
 - Anything involving submodules.
+
+## References
+
+Domain knowledge that doesn't fit in this procedural skill but a future
+session working on honeybot needs. Read the relevant one before
+re-deriving:
+
+- `references/upstream-hermes-bugs.md` — known bugs in `/opt/hermes`
+  (the upstream `hermes-agent` source bundled in the container) that bite
+  honeybot. Includes symptom, repro, root cause, and Dockerfile workaround
+  for each. Check here BEFORE diagnosing weird gateway / api_server /
+  provider-call failures from scratch — the answer is often already here.
+- `references/smtp-plan.md` — outbound mail design (Workspace SMTP relay,
+  `noreply@honeymanenterprises.com`, 1Password layout, repo wiring
+  checklist). Status: decided, not yet implemented. Pick up from here when
+  asked about SMTP rather than redesigning.

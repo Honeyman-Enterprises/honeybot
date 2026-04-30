@@ -182,6 +182,29 @@ ensure_item "HermesAPI" "API Credential" \
   "key[password]=$(gen_pw 32)"
 
 # ---------------------------------------------------------------------------
+# SMTP — Workspace relay for outbound mail (Open WebUI password reset /
+# email verification). All fields default empty: a missing real config
+# leaves Open WebUI's SMTP path inert (email verification toggle in
+# docker-compose.yml is the on/off switch) but does NOT block the bot
+# from booting. Fill in via the 1Password UI when you're ready to enable
+# outbound mail; design rationale + Workspace setup steps live at
+# skills/honeybot-dev/references/smtp-plan.md.
+#
+# Backend choice on first use: smtp-relay.gmail.com:587 (STARTTLS), with
+# `username` = a Workspace user that has 2-Step on, `app_password` = an
+# app-specific password generated for that user, `mail_from` = the
+# noreply@ address (does NOT need to be a real Workspace mailbox — the
+# relay accepts any From: in our domains).
+# ---------------------------------------------------------------------------
+ensure_item "SMTP" "API Credential" \
+  'host[text]=' \
+  'port[text]=' \
+  'username[text]=' \
+  'app_password[password]=' \
+  'mail_from[text]=' \
+  'mail_from_name[text]='
+
+# ---------------------------------------------------------------------------
 # OpenWebUI — secret key for signing its session cookies / JWTs.
 # ---------------------------------------------------------------------------
 # Open WebUI bakes WEBUI_SECRET_KEY into the JWT signing it uses for its

@@ -15,6 +15,11 @@ capabilities:
 
 # AWS Skill — v1 (per-user IAM keys)
 
+> **🔐 OTP Identity Gate**: Non-Slack sessions (Open WebUI, Discord, API)
+> must complete email-based identity verification before accessing credentials.
+> If `creds.sh` returns exit code 4, follow the OTP flow in the
+> `otp-identity-verification` skill before retrying.
+
 ## Identity model
 
 This skill is **strictly per-user**. When someone DMs "list my S3 buckets",

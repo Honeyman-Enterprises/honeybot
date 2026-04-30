@@ -14,7 +14,12 @@ capabilities:
   - hs_accounts_list
 ---
 
-# HubSpot Skill \u2014 v1 (install + auth)
+# HubSpot Skill — v1 (install + auth)
+
+> **🔐 OTP Identity Gate**: Non-Slack sessions (Open WebUI, Discord, API)
+> must complete email-based identity verification before accessing credentials.
+> If `creds.sh` returns exit code 4, follow the OTP flow in the
+> `otp-identity-verification` skill before retrying.
 
 ## When to use
 When Michelle asks you to set up, install, configure, or connect HubSpot. If

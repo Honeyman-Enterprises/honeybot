@@ -21,6 +21,7 @@
 #   0   success, secret printed to stdout
 #   2   usage error (missing service/field or user ID)
 #   3   vault lookup failed (item missing, field missing, op error)
+#   4   OTP identity verification required (non-Slack session not verified)
 #
 # Examples:
 #   PAK="$(creds.sh HubSpot personal_access_key)"        # uses $HONEYBOT_SLACK_USER
@@ -95,6 +96,55 @@ fi
 if ! [[ "$user_id" =~ ^[UW][A-Z0-9]{8,}$ ]]; then
   echo "creds.sh: '$user_id' does not look like a Slack user ID; refusing." >&2
   exit 2
+fi
+
+# ─── OTP identity gate ────────────────────────────────────────────────
+# Non-Slack sessions must prove identity via OTP before reading
+# credentials. Slack DMs are exempt because identity comes from
+# Slack's own signed WebSocket (the UID was already validated above).
+#
+# How it works:
+#   verify_session.sh wraps verify_session.py which calls
+#   otp_auth.check_session(). If the session is verified, that call
+#   also slides the 30-day expiry forward (sliding window).
+#
+# Bypass knobs:
+#   HONEYBOT_OTP_BYPASS=1  — skip the gate entirely (admin/debug)
+#   Interface is "slack"   — Slack identity is inherent, no OTP needed
+# ──────────────────────────────────────────────────────────────────────
+if [[ "${HONEYBOT_OTP_BYPASS:-}" != "1" ]]; then
+  # Determine interface from session key  (e.g. "slack:dm:U04ERIC" → "slack")
+  _otp_interface=""
+  if [[ -n "${HERMES_SESSION_KEY:-}" ]]; then
+    _otp_interface="${HERMES_SESSION_KEY%%:*}"
+  fi
+
+  if [[ "$_otp_interface" != "slack" ]]; then
+    _otp_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    _otp_session="${HERMES_SESSION_KEY:-unknown}"
+
+    if ! "$_otp_script_dir/verify_session.sh" \
+           --session-key "$_otp_session" \
+           --interface "${_otp_interface:-unknown}" >/dev/null 2>&1; then
+      cat >&2 <<OTP_ERR
+creds.sh: session is NOT identity-verified (OTP required).
+
+This session ($HERMES_SESSION_KEY) has not completed email-based
+identity verification. Before accessing credentials, the agent must:
+
+  1. Ask the user for their email address
+  2. Run:  python3 ~/.hermes/auth/otp_auth.py generate \\
+             --email USER@EXAMPLE.COM --session-key "$_otp_session"
+  3. The user checks their email for a 6-digit code
+  4. Run:  python3 ~/.hermes/auth/otp_auth.py verify \\
+             --code XXXXXX --session-key "$_otp_session"
+  5. Retry the original credential request
+
+See: skills/otp-identity-verification/SKILL.md
+OTP_ERR
+      exit 4
+    fi
+  fi
 fi
 
 vault_path="op://Honeybot/${service}-${user_id}/${field}"

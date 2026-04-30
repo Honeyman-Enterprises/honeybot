@@ -15,6 +15,11 @@ capabilities:
 
 # GitHub Skill — v1 (per-user)
 
+> **🔐 OTP Identity Gate**: Non-Slack sessions (Open WebUI, Discord, API)
+> must complete email-based identity verification before accessing credentials.
+> If `creds.sh` returns exit code 4, follow the OTP flow in the
+> `otp-identity-verification` skill before retrying.
+
 ## Identity model
 
 Per-user. PATs live at `op://Honeybot/GitHub-{SlackUserID}/token` and are

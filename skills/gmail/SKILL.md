@@ -34,6 +34,11 @@ related_skills:
 
 # Google Workspace per-user OAuth (v0.2)
 
+> **🔐 OTP Identity Gate**: Non-Slack sessions (Open WebUI, Discord, API)
+> must complete email-based identity verification before accessing credentials.
+> If `creds.sh` returns exit code 4, follow the OTP flow in the
+> `otp-identity-verification` skill before retrying.
+
 ## CRITICAL: this is the ONLY supported way to connect Google services
 
 Whenever a user asks to connect ANY Google service (Gmail, Calendar, Drive,

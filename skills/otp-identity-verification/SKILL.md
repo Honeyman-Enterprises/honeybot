@@ -18,6 +18,15 @@ capabilities:
 
 # OTP Identity Verification
 
+## Deployment status
+
+**Deployed.** PR #33 merged and the OTP gate is live in `creds.sh` and
+`skills/_lib/`. All non-Slack credential access now requires OTP
+verification.
+
+`HONEYBOT_OTP_BYPASS=1` exists as an admin/debug escape hatch but should
+not be used in normal operation.
+
 ## What this solves
 
 Honeybot grants per-user access to external services (Gmail, AWS, GitHub,
@@ -163,9 +172,12 @@ python3 skills/_lib/otp_auth.py revoke --session-key "$HERMES_SESSION_KEY"
 The OTP system normalizes session keys so verification persists sensibly:
 - **Slack**: `agent:main:slack:dm:CHANNEL:TS` → `slack:CHANNEL` (all
   threads in a DM channel share verification)
-- **Non-Slack with email**: `interface:email` (all sessions from the same
-  user on the same interface share verification)
+- **Non-Slack with UID**: `{interface}:{slack_uid}` (all sessions from
+  the same user on the same interface share verification)
 - **Fallback**: the raw session key
+
+**Keys must use stable IDs (Slack UIDs), not emails or names.** Email is
+only used as the OTP *delivery address*, never as a key component.
 
 This means: verify once on Open WebUI, and you stay verified for 30 days
 across all your Open WebUI conversations. Every credential access resets
@@ -205,13 +217,89 @@ skills/_lib/
 └── verified_sessions.json  # Verified sessions
 ```
 
+## Non-Slack session setup (critical)
+
+When running credential-accessing scripts from a non-Slack context (Open
+WebUI, Discord, API, manual testing), you MUST set `HERMES_SESSION_KEY` or
+`creds.sh` will crash with `unbound variable` (it uses `set -u`).
+
+**Known issue (as of 2026-04-30):** `HERMES_SESSION_KEY` is NOT
+automatically injected by the Hermes runtime for non-Slack sessions. The
+agent must export it manually before any `creds.sh` call. This is a gap
+in the gateway — Slack sessions get `$HONEYBOT_SLACK_USER` injected by
+the `honeybot-identity` hook, but non-Slack sessions have no equivalent
+for `HERMES_SESSION_KEY`.
+
+**Workaround:** Set it from the user's identity + interface. **Use stable
+IDs, not names or emails**, as keys — names and emails can change, IDs
+are permanent:
+```bash
+export HERMES_SESSION_KEY="openwebui:U09NS7DSK8U"
+export HONEYBOT_SLACK_USER=U09NS7DSK8U
+```
+
+The session key format is `{interface}:{user_id}`, e.g.:
+- `openwebui:U09NS7DSK8U` — Eric on Open WebUI (Slack UID as stable ID)
+- `discord:U09NS7DSK8U` — Eric on Discord
+- `api:U09NS7DSK8U` — API session
+
+**Use Slack UIDs as the universal user identifier** across all interfaces.
+Email is only used for *sending* the OTP — never as a session key component.
+This ensures session verification persists correctly even if the user's
+email address changes.
+
+**IMPORTANT: The session key used for `generate` MUST match the key used
+for `verify` and `check`.** If you generate with `openwebui:U09NS7DSK8U`
+but `creds.sh` passes a different key, verification won't be found.
+
+**Full invocation pattern for non-Slack sessions:**
+```bash
+export HERMES_SESSION_KEY="openwebui:U09NS7DSK8U"
+export HONEYBOT_SLACK_USER=U09NS7DSK8U
+
+# This will return exit 4 if not OTP-verified:
+~/.hermes/skills/gmail/bin/gmail.sh search "is:unread" --max 10
+
+# To verify first:
+python3 ~/.hermes/skills/_lib/otp_auth.py generate \
+  --email "eric.hodonsky@honeymanenterprises.com" \
+  --session-key "$HERMES_SESSION_KEY" \
+  --interface "openwebui" \
+  --claimed-uid "U09NS7DSK8U"
+# User provides the 6-digit code from their email
+python3 ~/.hermes/skills/_lib/otp_auth.py verify \
+  --code "123456" \
+  --session-key "$HERMES_SESSION_KEY"
+# Now credential access works for 30 days
+```
+
+**Note:** The `creds.sh` error message currently references
+`~/.hermes/auth/otp_auth.py` but the actual deployed path is
+`~/.hermes/skills/_lib/otp_auth.py`. Use the `skills/_lib/` path — the
+error message path is a known bug (queued for fix in next PR).
+
+### Verifying the session actually persisted
+
+After calling `verify`, always confirm `verified_sessions.json` was
+created. In this session we discovered a case where verify appeared to
+succeed (agent said "Verified!") but the file was never written — the
+verify call had actually failed silently due to a session key mismatch.
+
+```bash
+cat ~/.hermes/auth/verified_sessions.json
+# Should show an entry for your session key with expires_at ~30 days out
+```
+
+If the file doesn't exist or is empty after verify, the session key used
+for generate didn't match the one used for verify.
+
 ## Edge cases
 
 | Situation | Handling |
 |-----------|----------|
 | User gives wrong email | OTP goes to wrong inbox; they never get the code; they retry with correct email |
 | User's email not in 1Password | OTP verifies their identity, but `creds.sh` will still fail at the `op read` step (no vault item for that UID). That's correct — they're authenticated but not authorized. |
-| Multiple users, same interface | Each gets their own normalized session key (`interface:email`), so verification is per-user |
+| Multiple users, same interface | Each gets their own normalized session key (`{interface}:{slack_uid}`), so verification is per-user |
 | Session expires mid-conversation | Next credential access triggers a new OTP flow. 30-day sliding window makes this extremely rare — it only happens if you don't use any credentials for a full month. |
 | SMTP not configured | `otp_auth.py` raises RuntimeError, agent should tell user "email verification is not available yet" |
 

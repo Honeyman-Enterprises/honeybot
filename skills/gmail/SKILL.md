@@ -163,6 +163,37 @@ Gmail subcommands infer the user from `$HONEYBOT_SLACK_USER` (set by the
 gateway's `honeybot-identity` hook). Pass `--user UID` as the FIRST arg to
 override for admin/debug.
 
+### Non-Slack access (Open WebUI, Discord, API)
+
+From non-Slack interfaces, `$HONEYBOT_SLACK_USER` is not set by the
+gateway. You must set it as an env var — the `--user` flag on `gmail.sh`
+does NOT propagate to `creds.sh` (which requires the env var).
+
+The OTP system is **deployed and live**. `creds.sh` requires both
+`HERMES_SESSION_KEY` and a verified OTP session for non-Slack access.
+Both env vars must be set:
+
+```bash
+export HERMES_SESSION_KEY="openwebui:eric.hodonsky@honeymanenterprises.com"
+export HONEYBOT_SLACK_USER=U09NS7DSK8U
+./skills/gmail/bin/gmail.sh search "is:unread" --max 10
+```
+
+**Known issue:** `HERMES_SESSION_KEY` is not automatically injected by
+the runtime for non-Slack sessions. The agent must export it manually.
+Use the format `interface:email` (e.g.,
+`openwebui:eric.hodonsky@honeymanenterprises.com`). See the
+`otp-identity-verification` skill for the full OTP flow.
+
+The `creds.sh` error messages tell you exactly what's missing:
+- Exit 2, "refusing to read credentials without a Slack user ID" → set `HONEYBOT_SLACK_USER`
+- Exit 4, "session not verified" → complete OTP flow (see `otp-identity-verification` skill)
+- Exit 1, "HERMES_SESSION_KEY: unbound variable" → set `HERMES_SESSION_KEY` env var
+
+**The account is `eric.hodonsky@honeymanenterprises.com`** — not
+`eric@honeymanenterprises.com` (that's a different address that routes
+to the same inbox but is not the canonical identity).
+
 For Calendar, Drive, Docs, Sheets, Contacts: the user's refresh token
 already has all the scopes (full Workspace consent at connect time). Mint
 an access token via `_token.sh` and call the relevant Google API directly

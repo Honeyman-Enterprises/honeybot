@@ -1,101 +1,108 @@
 # Honeybot outbound mail — design notes
 
-Where we've landed on letting honeybot send email (password-reset links
-from Open WebUI, account-verification flows, future notification surfaces).
-Status as of 2026-04-30: **decided, not yet implemented.** No SMTP
-scaffolding exists in the repo — `.env.schema`, `secrets-init`, and the
-`openwebui` service block all need wiring.
+Where we've landed on letting honeybot send email. Primary use case is
+the **cross-provider identity-linking flow** (verify the user controls
+the email a new auth provider asserted before attaching it to their
+unified profile). Open WebUI's password-reset path is a downstream
+consumer of the same relay, not the reason this exists.
 
-The point of this doc: when a future session asks "can honeybot send email"
-or "what's our SMTP story," don't redesign from scratch — pick this up.
+The point of this doc: when a future session asks "can honeybot send
+email" or "what's our SMTP story," don't redesign from scratch — pick
+this up. **Implementation contract** lives in `docs/email-verification.md`.
 
 ## Decision
 
-Use **Google Workspace SMTP relay** (`smtp-relay.gmail.com:587`, STARTTLS).
+Use **AWS SES SMTP** (`email-smtp.us-east-1.amazonaws.com:587`, STARTTLS).
+Custom MAIL FROM domain `mail.honeymanenterprises.com` so bounces stay
+out of the apex. From: `noreply@honeymanenterprises.com` (fire-and-forget
+— replies hit the SES suppression list, no human inbox).
 
-Why this over alternatives:
+Why SES over the alternatives:
 
 | Option                        | Verdict | Reason |
 |-------------------------------|---------|--------|
-| Workspace SMTP relay (chosen) | ✅      | Service-style sender, can MAIL FROM any `*@honeymanenterprises.com`, 10k/day per user, app-password auth |
+| **AWS SES SMTP (chosen)**     | ✅      | DKIM/SPF/MX records auto-publish into Route 53 (we already host the zone there); bounce subdomain isolates apex DMARC; same vendor as EC2/Route53 — one fewer auth surface to rotate; no human seat required for a "service mailbox"; least-privilege IAM (only `ses:SendRawEmail`) |
+| Workspace SMTP relay          | ⚠️      | Initially chosen for "we already have Workspace." Rejected on second pass: requires a real Workspace user with 2-Step + an app password (more credential lifecycle), bounces share the apex domain, and Workspace doesn't auto-publish DKIM/SPF the way Route 53 ↔ SES does |
 | Plain `smtp.gmail.com`        | ❌      | Couples to a real human mailbox; MAIL FROM must be that mailbox or a verified alias; 500/day cap |
-| Gmail API (OAuth send)        | ❌      | Requires per-user OAuth refresh dance — wrong fit for a service container |
-| AWS SES                       | ⚠️      | Viable, but adds another vendor + DKIM/SPF setup we don't have configured for the domain |
-| Postmark / Resend             | ⚠️      | Same — extra vendor. Revisit if Workspace relay rate-limits become real |
+| Gmail API (OAuth send)        | ❌      | Per-user OAuth refresh dance — wrong fit for a service container |
+| Postmark / Resend / SendGrid  | ⚠️      | Viable, but extra vendor + extra bill + extra DKIM dance. Revisit only if SES quotas / deliverability become real |
 
 ## Sender shape
 
 ```
-MAIL FROM: noreply@honeymanenterprises.com
-From:      Honeybot <noreply@honeymanenterprises.com>
+MAIL FROM (envelope): bounce-handler@mail.honeymanenterprises.com   (SES-managed)
+From (header):        Honeybot <noreply@honeymanenterprises.com>
+Reply-To:             (none — fire-and-forget)
 ```
 
-`noreply@…` does NOT need to be a real Workspace user — Workspace SMTP
-relay accepts any address in our domains as MAIL FROM. (Optional cleanup:
-create it as a Group with posting locked down, so any reply goes to a
-dead-letter group rather than bouncing.)
+`noreply@honeymanenterprises.com` does NOT need to be a real mailbox —
+SES accepts any From: in the verified domain. Bounces go to the SES
+account-level suppression list automatically (and optionally to an SNS
+topic if we wire one later).
 
-## 1Password layout
+## 1Password layout (current)
 
 ```
-op://Honeybot/SMTP/host           = smtp-relay.gmail.com
+op://Honeybot/SMTP/host           = email-smtp.us-east-1.amazonaws.com
 op://Honeybot/SMTP/port           = 587
-op://Honeybot/SMTP/username       = <relay-auth-user>@honeymanenterprises.com
-op://Honeybot/SMTP/app_password   = <16-char Workspace app password>
+op://Honeybot/SMTP/username       = <SES SMTP user — looks like AKIA...>
+op://Honeybot/SMTP/app_password   = <SES SMTP password — derived, mixed-case>
 op://Honeybot/SMTP/mail_from      = noreply@honeymanenterprises.com
 op://Honeybot/SMTP/mail_from_name = Honeybot
 ```
 
-`username` is whichever Workspace user generated the app password. Picking
-a dedicated `bot@…` user (rather than a human's account) ages better.
+`username` / `app_password` are **SES SMTP credentials**, not the IAM
+access key/secret. Generate them via SES Console → SMTP settings →
+Create SMTP credentials. The IAM user behind them (`honeybot-ses-smtp`)
+holds only `AmazonSesSendingAccess` (= `ses:SendRawEmail`).
 
-## Repo wiring (one PR)
+## Repo wiring (already landed)
 
-1. **`.env.schema`** — add varlock entries pulling each field from the
-   1Password item above into `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`,
-   `SMTP_PASSWORD`, `SMTP_MAIL_FROM`, `SMTP_MAIL_FROM_NAME`.
+1. **`.env.schema`** — `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`,
+   `SMTP_PASSWORD`, `SMTP_MAIL_FROM`, `SMTP_MAIL_FROM_NAME` resolved
+   via varlock from `op://Honeybot/SMTP/*`. All optional at the
+   schema layer — `send_email.send()` raises `SMTPNotConfigured`
+   if any required field is empty, every consumer must handle that
+   as "feature off."
 
-2. **`scripts/seed-vault.sh` / secrets-init** — emit the resolved values
-   into `.env.runtime` so non-Varlock-aware containers (openwebui, ES,
-   neo4j) can `env_file` them.
+2. **`scripts/seed-vault.sh`** — `ensure_item "SMTP"` creates an
+   empty placeholder on first boot so op() resolution doesn't fail
+   `itemNotFound`. Subsequent boots skip it — 1Password edits survive
+   any number of redeploys.
 
-3. **`docker-compose.yml` `openwebui` service** — wire Open WebUI's native
-   SMTP envs (their names, not ours):
-   ```yaml
-   SMTP_HOST: ${SMTP_HOST}
-   SMTP_PORT: ${SMTP_PORT}
-   SMTP_USERNAME: ${SMTP_USERNAME}
-   SMTP_PASSWORD: ${SMTP_PASSWORD}
-   SMTP_FROM_EMAIL: ${SMTP_MAIL_FROM}
-   SMTP_FROM_NAME: ${SMTP_MAIL_FROM_NAME}
-   SMTP_USE_TLS: "true"
-   ```
-   Then flip `ENABLE_EMAIL_VERIFICATION: "true"` and (once Eric's admin
-   account exists) `ENABLE_SIGNUP: "false"`.
+3. **`skills/_lib/send_email.py`** + `send-email.sh` — single
+   source-of-truth sender. Stdlib only (smtplib + email.mime).
+   Every consumer (Python or shell) routes through this. Nobody
+   invents new env names, nobody touches op:// or smtplib directly.
 
-4. **`scripts/smtp-smoke.sh`** (optional but cheap) — connects to the
-   relay, runs EHLO + STARTTLS + AUTH, sends a 1-line test email to a
-   provided address, exits 0/1. Use for post-deploy validation and
-   future regression-checking.
+4. **`docs/email-verification.md`** — full L0–L3 layer diagram +
+   issue/store/send/consume/attach contract every verification flow
+   must follow + the SES setup walkthrough.
 
-## Workspace admin steps (browser, NOT in PR)
+## SES bring-up steps (browser, NOT in PR)
 
-1. Admin Console → Apps → Google Workspace → Gmail → Routing → **SMTP
-   relay service** → Add:
-   - Allowed senders: *Only addresses in my domains*
-   - Authentication: *Require SMTP authentication*
-   - Encryption: *Require TLS*
-2. Pick or create the auth user (e.g. `bot@honeymanenterprises.com`).
-3. That user → Account → 2-Step Verification ON → **App passwords** →
-   generate one labeled `honeybot-smtp-relay`.
-4. Paste the 16-char password into 1Password as
-   `op://Honeybot/SMTP/app_password`.
+Walkthrough lives in `docs/email-verification.md` §"SMTP relay setup
+(AWS SES)". Summary:
+
+1. SES → Verified identities → Create identity for the apex domain
+   with custom MAIL FROM `mail.honeymanenterprises.com` and Easy
+   DKIM. ✅ "Publish DNS records to Route 53" — SES drops the
+   records into our zone automatically.
+2. Add apex SPF (`v=spf1 include:amazonses.com ~all`) and DMARC
+   (`v=DMARC1; p=none; …`) via Route 53 if not present.
+3. Request production access (out of sandbox) — usually <24h.
+4. SES → SMTP settings → Create SMTP credentials → IAM user
+   `honeybot-ses-smtp`. Download the CSV (one-shot reveal).
+5. Populate the `SMTP` item in 1Password from the CSV + the values
+   in the table above.
+6. `docker compose restart honeybot`. Smoke-test via
+   `python3 .../send_email.py --to verified@addr --subject test --body test`.
 
 ## Reuse beyond Open WebUI
 
-The `SMTP_*` envs are intentionally generic. Future surfaces — webhook-
-triggered alerts, weekly digest from a scheduled job, ad-hoc skill emails —
-should read the same envs rather than re-defining their own. If a future
-skill needs to send mail from a Python script in the honeybot container,
-use stdlib `smtplib` against `SMTP_HOST:SMTP_PORT` with STARTTLS and the
-existing creds — don't reach for an SDK.
+The `SMTP_*` envs are intentionally backend-agnostic. Future surfaces —
+webhook-triggered alerts, weekly digest from a scheduled job, ad-hoc
+skill emails — should call `skills/_lib/send_email.send()` rather than
+re-defining their own SMTP envs or reaching for `smtplib` directly. If
+we ever swap backends again (e.g. SES → Postmark, or to add a fallback
+provider), only `send_email.py` changes — every consumer is unaffected.

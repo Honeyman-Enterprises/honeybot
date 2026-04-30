@@ -182,6 +182,40 @@ ensure_item "HermesAPI" "API Credential" \
   "key[password]=$(gen_pw 32)"
 
 # ---------------------------------------------------------------------------
+# SMTP — outbound mail relay for honeybot. Primary use case is the
+# cross-provider identity-linking flow: when a user attaches a new auth
+# provider (Google, GitHub, Microsoft, …) to their unified profile, the
+# system sends a one-time link to the email that provider asserted, to
+# prove the human controls that inbox. Open WebUI's password-reset path
+# is a downstream consumer of the same relay, not the reason it exists.
+# Full design + L0–L3 contract lives at docs/email-verification.md.
+#
+# All fields default empty. send_email.send() raises SMTPNotConfigured
+# when any required field is empty, and every consumer is required to
+# handle that as "feature off" — bot itself boots fine without SMTP.
+# Fill in via the 1Password UI when you're ready to enable outbound
+# mail; the SES Console click-path is in the design doc.
+#
+# Backend: AWS SES SMTP. Fill from the SES Console after verifying the
+# domain identity and generating SMTP credentials:
+#   `host`           = email-smtp.us-east-1.amazonaws.com
+#   `port`           = 587  (STARTTLS)
+#   `username`       = SES SMTP user (NOT an IAM access key — derived
+#                      via SES Console "Create SMTP credentials")
+#   `app_password`   = SES SMTP password (same dialog)
+#   `mail_from`      = noreply@honeymanenterprises.com (any address in
+#                      a verified domain works; doesn't need a mailbox)
+#   `mail_from_name` = display name, e.g. "Honeybot"
+# ---------------------------------------------------------------------------
+ensure_item "SMTP" "API Credential" \
+  'host[text]=' \
+  'port[text]=' \
+  'username[text]=' \
+  'app_password[password]=' \
+  'mail_from[text]=' \
+  'mail_from_name[text]='
+
+# ---------------------------------------------------------------------------
 # OpenWebUI — secret key for signing its session cookies / JWTs.
 # ---------------------------------------------------------------------------
 # Open WebUI bakes WEBUI_SECRET_KEY into the JWT signing it uses for its

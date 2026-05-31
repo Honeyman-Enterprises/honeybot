@@ -226,4 +226,28 @@ ensure_item "SMTP" "API Credential" \
 ensure_item "OpenWebUI" "API Credential" \
   "secret_key[password]=$(gen_pw 48)"
 
+# ---------------------------------------------------------------------------
+# GitHub Bot — GitHub App credentials for the bot's own repo operations.
+# ---------------------------------------------------------------------------
+# This is a GitHub App (NOT a personal access token). The fields (app_id,
+# installation_id, client_id, client_secret) and the attached PEM private
+# key are provisioned manually in the GitHub UI and then stored in
+# 1Password by hand. They CANNOT be auto-generated.
+#
+# ensure_item is idempotent (skip-if-exists), so this will never overwrite
+# the real item — it only creates an empty placeholder on a truly cold
+# deploy so the dependency is documented and discoverable. The bot will
+# NOT function for GitHub operations until a human fills in the real
+# values and attaches the PEM file in the 1Password UI.
+#
+# Consumers: honeybot-dev skill (self-PRs), skills/_lib/gh-app-token.sh,
+#            and any workflow that pushes to Honeyman-Enterprises repos.
+ensure_item "GitHub Bot" "API Credential" \
+  'username[text]=' \
+  'credential[password]=' \
+  'app_id[password]=' \
+  'installation_id[password]=' \
+  'client_id[text]=' \
+  'client_secret[password]='
+
 log "done"

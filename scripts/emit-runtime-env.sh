@@ -78,15 +78,11 @@ ELASTIC_PASSWORD="$(read_or_warn 'op://Honeybot/Elasticsearch/password')"
 NEO4J_AUTH="$(read_or_warn 'op://Honeybot/Neo4j/auth')"
 
 # Open WebUI session signing key + the bearer Open WebUI uses to call
-# Hermes' api_server. Both are referenced in docker-compose.yml's openwebui
-# service block as ${OPENWEBUI_SECRET_KEY:-from-env-file} and
-# ${API_SERVER_KEY:-from-env-file} — the `:-from-env-file` defaults are
-# placeholders that ONLY hold up if this script actually populates them.
-# Without these reads, openwebui boots with the literal string
-# "from-env-file" as both its session signer and its bearer to Hermes,
-# which means (a) every restart invalidates every Open WebUI session and
-# (b) Hermes' api_server rejects every request from openwebui because the
-# bearer doesn't match API_SERVER_KEY in the honeybot container.
+# Hermes' api_server. docker-compose.yml does NOT set these in the
+# openwebui `environment:` block — env_file (.env.runtime) is the sole
+# source. This script emits the exact var names Open WebUI expects
+# (OPENAI_API_KEY, WEBUI_SECRET_KEY) so no Compose ${} remapping is
+# needed.
 #
 # Fail-soft (read_or_warn): if these are missing in 1Password, openwebui
 # will still boot but won't function — surfaces the misconfiguration in

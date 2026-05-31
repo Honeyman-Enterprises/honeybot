@@ -54,10 +54,12 @@ that consumes it.
 
 - `openwebui` — Open WebUI container (ghcr.io/open-webui/open-webui:main).
   - On `honeynet`. No `ports:` mapping — only nginx is the public surface.
-  - Reads two secrets from `.env.runtime` (varlock-resolved):
-    - `OPENWEBUI_SECRET_KEY` — signs Open WebUI's session JWTs.
-    - `API_SERVER_KEY` — Hermes bearer token, copied into `OPENAI_API_KEY`
+  - Reads secrets from `.env.runtime` (resolved from 1Password by
+    `emit-runtime-env.sh` at container start):
+    - `OPENAI_API_KEY` — Hermes bearer token (from `op://Honeybot/HermesAPI/key`)
       so Open WebUI authenticates to honeybot:8642.
+    - `WEBUI_SECRET_KEY` — signs Open WebUI's session JWTs (from
+      `op://Honeybot/OpenWebUI/secret_key`).
   - `OPENAI_API_BASE_URL=http://honeybot:8642/v1` — uses Hermes as its
     sole model provider.
   - `ENABLE_OLLAMA_API=false` — we don't run Ollama.

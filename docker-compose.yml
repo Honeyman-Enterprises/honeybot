@@ -391,11 +391,14 @@ services:
       # `host.docker.internal` doesn't work on Linux without a workaround;
       # use the service name on honeynet instead.
       OPENAI_API_BASE_URL: http://honeybot:8642/v1
-      # OPENAI_API_KEY is sourced from .env.runtime → API_SERVER_KEY.
-      # Open WebUI doesn't have a separate OPENAI_API_KEY env knob that
-      # accepts indirection, so we copy it through. The varlock-resolved
-      # value is what lands in container env; never logged, never on host.
-      OPENAI_API_KEY: ${API_SERVER_KEY:-from-env-file}
+
+      # OPENAI_API_KEY — the bearer token Open WebUI presents to the
+      # Hermes api_server — comes from .env.runtime (written by
+      # emit-runtime-env.sh, which reads op://Honeybot/HermesAPI/key).
+      # Do NOT set it here in `environment:` — that would override the
+      # env_file injection with a Compose-parse-time ${} interpolation
+      # that resolves against the host shell (where the var doesn't
+      # exist), falling back to a useless literal string.
 
       # Suppress Open WebUI's auto-discovery of Ollama (we don't run it).
       # Without this, the dashboard renders an "Ollama unreachable" banner
@@ -403,9 +406,11 @@ services:
       ENABLE_OLLAMA_API: "false"
 
       # ---- Auth / sessions --------------------------------------------
-      # Signs Open WebUI's own session JWTs (NOT the Hermes API key).
-      # Sourced from .env.runtime → OPENWEBUI_SECRET_KEY.
-      WEBUI_SECRET_KEY: ${OPENWEBUI_SECRET_KEY:-from-env-file}
+      # WEBUI_SECRET_KEY — signs Open WebUI's own session JWTs (NOT the
+      # Hermes API key). Comes from .env.runtime → WEBUI_SECRET_KEY
+      # (written by emit-runtime-env.sh from
+      # op://Honeybot/OpenWebUI/secret_key). Same reasoning as
+      # OPENAI_API_KEY above: do NOT set it here.
 
       # First signup becomes admin. After you've created your account,
       # flip to "false" and re-up the container to lock down the URL:
@@ -429,30 +434,17 @@ services:
       WEBUI_AUTH_TRUSTED_EMAIL_HEADER: ""
 
       # ---- SMTP (outbound mail) ----------------------------------------
-      # Open WebUI uses these to send password-reset links and account-
-      # verification emails. Backend is Google Workspace SMTP relay; full
-      # design rationale + 1Password layout in
-      # skills/honeybot-dev/references/smtp-plan.md.
+      # All SMTP_* values come from .env.runtime (emitted by secrets-init
+      # from 1Password). Do NOT set them here in `environment:` — that
+      # would override the env_file injection with empty Compose-parse-
+      # time ${} interpolations. emit-runtime-env.sh writes the exact
+      # env var names Open WebUI expects (SMTP_HOST, SMTP_PORT,
+      # SMTP_USERNAME, SMTP_PASSWORD, SMTP_FROM_EMAIL, SMTP_FROM_NAME).
       #
-      # All five core SMTP_* values come from .env.runtime (emitted by
-      # secrets-init from 1Password). They're empty assignments on a
-      # cold/un-provisioned host — Open WebUI then fails its outbound
-      # send paths individually rather than refusing to boot, which is
-      # the right posture (the chat surface should still work without
-      # functional email).
-      #
-      # SMTP_USE_TLS=true is hardcoded — Workspace relay rejects
-      # plaintext, and we never want to negotiate downward. If a future
-      # backend (SES, Postmark, ...) needs SMTPS-on-465 instead of
-      # STARTTLS-on-587, switch the relevant Open WebUI env name (some
-      # forks expose SMTP_SSL) — don't disable TLS to make plaintext work.
-      SMTP_HOST:       ${SMTP_HOST:-}
-      SMTP_PORT:       ${SMTP_PORT:-587}
-      SMTP_USERNAME:   ${SMTP_USERNAME:-}
-      SMTP_PASSWORD:   ${SMTP_PASSWORD:-}
-      SMTP_FROM_EMAIL: ${SMTP_MAIL_FROM:-}
-      SMTP_FROM_NAME:  ${SMTP_MAIL_FROM_NAME:-Honeybot}
-      SMTP_USE_TLS:    "true"
+      # SMTP_USE_TLS is hardcoded here because it's not a secret and
+      # shouldn't vary — Workspace relay rejects plaintext, and we never
+      # want to negotiate downward.
+      SMTP_USE_TLS: "true"
 
       # Email verification on signup. Set true once SMTP is provisioned in
       # 1Password (op://Honeybot/SMTP/*) — see smtp-plan.md for the

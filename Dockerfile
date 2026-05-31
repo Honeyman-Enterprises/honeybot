@@ -84,6 +84,14 @@ deps = sorted({d for p in pathlib.Path('plugins').rglob('plugin.yaml') \
 print('Plugin pip deps:', deps); \
 deps and subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--no-cache-dir', *deps])"
 
+# ---- Plaid Python SDK -------------------------------------------------------
+# Read-only financial data aggregation (bank accounts, investments, transactions).
+# Plaid is API-only (no CLI). The SDK is used by the plaid skill to call
+# /transactions/get, /accounts/balance/get, /investments/holdings/get, etc.
+# Credentials (PLAID_CLIENT_ID, PLAID_SECRET) injected at runtime from 1Password.
+ARG PLAID_SDK_VERSION=39.2.0
+RUN pip install --no-cache-dir "plaid-python==${PLAID_SDK_VERSION}"
+
 # ---- HubSpot CLI -----------------------------------------------------------
 # Pre-installed globally as root so `honeybot` (non-root) can invoke `hs`
 # without npm prefix dances. The skill's job is the auth flow, not the install.

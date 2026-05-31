@@ -47,6 +47,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
  && apt-get install -y --no-install-recommends nodejs \
  && rm -rf /var/lib/apt/lists/*
+ && pip install 'anthropic>=0.39.0'
 
 # ---- 1Password CLI (op) ----------------------------------------------------
 # Arch-aware: amd64 \u2192 x86_64 pkg; arm64 \u2192 aarch64 pkg.

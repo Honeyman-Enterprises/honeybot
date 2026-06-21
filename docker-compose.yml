@@ -134,6 +134,11 @@ services:
       # Self-edit workspace (clone of this repo). The honeybot-dev skill
       # lives here. Persists so a branch survives a container restart.
       - honeybot-workspace:/home/honeybot/workspace
+      # Generated files (images, exports) served by nginx at /files/.
+      # Shared with the nginx container (read-only there) so the agent
+      # can drop a file and it's immediately accessible at
+      # https://honeybot.honeymanenterprises.com/files/<name>.
+      - hermes-files:/home/honeybot/.hermes/files
 
     # No `ports:` — Slack Socket Mode is outbound-only. Nothing listens.
 
@@ -333,6 +338,10 @@ services:
       # request per whitelisted domain — fine, LE prod limits are 50
       # certs/week/registered-domain which we're nowhere near.
       - acme-storage:/etc/openresty/acme-storage
+      # Read-only mount of the hermes-files volume. The honeybot
+      # container writes generated files (images, exports) here; nginx
+      # serves them at /files/ with a location block in honeybot.conf.
+      - hermes-files:/srv/hermes-files:ro
 
     mem_limit: 128m
     memswap_limit: 128m
@@ -616,6 +625,11 @@ volumes:
   # container restarts; losing it forces LE re-issuance on next
   # handshake per whitelisted domain.
   acme-storage:
+  # Generated files (images, exports) shared between honeybot and nginx.
+  # honeybot writes to /home/honeybot/.hermes/files, nginx reads from
+  # /srv/hermes-files (read-only) and serves at /files/. Persists across
+  # container restarts so generated images survive rebuilds.
+  hermes-files:
 
 networks:
   honeynet:

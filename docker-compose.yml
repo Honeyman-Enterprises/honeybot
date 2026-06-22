@@ -257,6 +257,11 @@ services:
       # Host docker daemon. No alternative — the sidecar needs to issue
       # `docker compose up -d --build` against it.
       - /var/run/docker.sock:/var/run/docker.sock
+      # Deploy status output. pull-and-restart.sh writes
+      # deploy-status.json here on every deploy attempt (deploying,
+      # success, failed). nginx serves it at /files/deploy-status.json
+      # and the honeybot container reads it for self-checks.
+      - hermes-files:/srv/hermes-files
 
     # Tiny footprint: just a polling loop + occasional docker/git invocations.
     mem_limit: 256m

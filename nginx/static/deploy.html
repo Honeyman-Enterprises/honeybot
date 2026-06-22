@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Honeybot Deploy Status</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --success: #3fb950;
+    --warning: #d29922;
+    --danger: #f85149;
+    --info: #58a6ff;
+    --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    max-width: 520px;
+    width: 100%;
+    overflow: hidden;
+  }
+  .header {
+    padding: 1.5rem 1.5rem 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .header svg { width: 28px; height: 28px; flex-shrink: 0; }
+  .header h1 { font-size: 1.1rem; font-weight: 600; }
+  .body { padding: 1.5rem; }
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.9rem;
+    border-radius: 2rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    margin-bottom: 1.25rem;
+  }
+  .status-badge .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+  .status-success { background: rgba(63,185,80,0.15); color: var(--success); }
+  .status-success .dot { background: var(--success); }
+  .status-deploying { background: rgba(210,153,34,0.15); color: var(--warning); }
+  .status-deploying .dot { background: var(--warning); animation: pulse 1.5s ease-in-out infinite; }
+  .status-failed { background: rgba(248,81,73,0.15); color: var(--danger); }
+  .status-failed .dot { background: var(--danger); }
+  .status-unknown { background: rgba(139,148,158,0.15); color: var(--text-dim); }
+  .status-unknown .dot { background: var(--text-dim); }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+  .fields { display: grid; gap: 0.75rem; }
+  .field {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .field:last-child { border-bottom: none; }
+  .field-label { color: var(--text-dim); font-size: 0.85rem; }
+  .field-value {
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    text-align: right;
+    max-width: 60%;
+    word-break: break-word;
+  }
+  .field-value a {
+    color: var(--info);
+    text-decoration: none;
+  }
+  .field-value a:hover { text-decoration: underline; }
+  .footer {
+    padding: 0.75rem 1.5rem;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+  }
+  .refresh-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 0.3rem 0.7rem;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.75rem;
+    transition: all 0.15s;
+  }
+  .refresh-btn:hover {
+    border-color: var(--text-dim);
+    color: var(--text);
+  }
+  .error-banner {
+    padding: 1.5rem;
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 0.9rem;
+  }
+  .commit-msg {
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    background: var(--bg);
+    padding: 0.6rem 0.8rem;
+    border-radius: 6px;
+    margin-top: 0.75rem;
+    line-height: 1.4;
+    word-break: break-word;
+  }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div class="header">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+      <path d="M2 17l10 5 10-5"/>
+      <path d="M2 12l10 5 10-5"/>
+    </svg>
+    <h1>Honeybot Deploy Status</h1>
+  </div>
+
+  <div class="body" id="content">
+    <div class="error-banner">Loading...</div>
+  </div>
+
+  <div class="footer">
+    <span id="last-checked">—</span>
+    <button class="refresh-btn" onclick="load()">Refresh</button>
+  </div>
+</div>
+
+<script>
+const REPO = 'Honeyman-Enterprises/honeybot';
+
+function timeAgo(dateStr) {
+  const now = new Date();
+  const then = new Date(dateStr);
+  const secs = Math.floor((now - then) / 1000);
+  if (secs < 60) return secs + 's ago';
+  if (secs < 3600) return Math.floor(secs / 60) + 'm ago';
+  if (secs < 86400) return Math.floor(secs / 3600) + 'h ago';
+  return Math.floor(secs / 86400) + 'd ago';
+}
+
+function statusClass(s) {
+  if (s === 'success') return 'status-success';
+  if (s === 'deploying') return 'status-deploying';
+  if (s === 'failed') return 'status-failed';
+  return 'status-unknown';
+}
+
+function statusLabel(s) {
+  if (s === 'success') return 'Deployed';
+  if (s === 'deploying') return 'Deploying…';
+  if (s === 'failed') return 'Failed';
+  return 'Unknown';
+}
+
+function render(data) {
+  const el = document.getElementById('content');
+  const commitUrl = `https://github.com/${REPO}/commit/${data.sha}`;
+  const shortSha = data.short_sha || data.sha?.slice(0, 7) || '???';
+
+  let extra = '';
+  if (data.stage) {
+    extra += `
+      <div class="field">
+        <span class="field-label">Failed stage</span>
+        <span class="field-value" style="color:var(--danger)">${data.stage}</span>
+      </div>`;
+  }
+  if (data.previous_sha) {
+    const prevUrl = `https://github.com/${REPO}/commit/${data.previous_sha}`;
+    const compareUrl = `https://github.com/${REPO}/compare/${data.previous_sha.slice(0,7)}...${data.sha.slice(0,7)}`;
+    extra += `
+      <div class="field">
+        <span class="field-label">Previous</span>
+        <span class="field-value"><a href="${prevUrl}" target="_blank">${data.previous_sha.slice(0,7)}</a>
+          &nbsp;(<a href="${compareUrl}" target="_blank">diff</a>)</span>
+      </div>`;
+  }
+
+  let commitMsg = '';
+  if (data.commit_subject) {
+    commitMsg = `<div class="commit-msg">${data.commit_subject}</div>`;
+  }
+
+  el.innerHTML = `
+    <div class="status-badge ${statusClass(data.status)}">
+      <span class="dot"></span>
+      ${statusLabel(data.status)}
+    </div>
+    <div class="fields">
+      <div class="field">
+        <span class="field-label">Commit</span>
+        <span class="field-value"><a href="${commitUrl}" target="_blank">${shortSha}</a></span>
+      </div>
+      <div class="field">
+        <span class="field-label">Branch</span>
+        <span class="field-value">${data.branch || '—'}</span>
+      </div>
+      <div class="field">
+        <span class="field-label">Author</span>
+        <span class="field-value">${data.commit_author || '—'}</span>
+      </div>
+      <div class="field">
+        <span class="field-label">Deployed</span>
+        <span class="field-value">${data.timestamp ? timeAgo(data.timestamp) : '—'}</span>
+      </div>
+      ${extra}
+    </div>
+    ${commitMsg}
+  `;
+}
+
+async function load() {
+  const checkedEl = document.getElementById('last-checked');
+  try {
+    const resp = await fetch('/files/deploy-status.json?_=' + Date.now());
+    if (!resp.ok) throw new Error('No deploy status yet');
+    const data = await resp.json();
+    render(data);
+    checkedEl.textContent = 'Checked ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    document.getElementById('content').innerHTML =
+      '<div class="error-banner">No deploy status available yet.<br>Status appears after the first sidecar-triggered deploy.</div>';
+    checkedEl.textContent = 'Checked ' + new Date().toLocaleTimeString();
+  }
+}
+
+// Auto-refresh every 30s.
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>

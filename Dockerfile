@@ -213,15 +213,10 @@ RUN mkdir -p .hermes/config .hermes/skills .hermes/data workspace
 # back as `HTTP 401: Missing Authentication header`.
 #
 # Same write-to-config durability story as the memory.provider/display lines
-# below: only .hermes/data is volume-mounted in docker-compose.yml. Anything
-# `hermes config set` writes lives at ~/.hermes/config.yaml, which is image-
-# baked, NOT in a volume. That means:
-#   - `docker compose restart honeybot`             → preserved (image unchanged)
-#   - `docker compose restart <other service>`      → preserved (we're not touched)
-#   - redeploy sidecar runs `up -d --build`         → preserved (rebakes from here)
-#   - ad-hoc `docker exec ... hermes config set`    → LOST on next rebuild
-# So this RUN is the only durable surface for provider selection. Don't
-# rely on runtime exec writes.
+# below: config.yaml is symlinked into the hermes-state volume by
+# sync-hermes-state.sh, so `hermes config set` writes survive container
+# rebuilds. The RUN commands below set the image defaults; the volume
+# preserves any runtime changes made via `docker exec ... hermes config set`.
 #
 # We write the chosen model to BOTH `model.name` and `model.default`. This
 # is deliberate, not redundant:
@@ -253,9 +248,9 @@ RUN hermes config set model.provider anthropic \
 # Select Mem0 as the long-term memory backend. The API key itself is injected
 # at container start via MEM0_API_KEY (resolved by Varlock from
 # op://Honeybot/Mem0/key). We bake the *provider selection* into the image
-# because the only persistent volume is .hermes/data — config written by
-# `hermes config set` would otherwise be lost on every container recreation.
-# Idempotent; safe across image rebuilds.
+# because config.yaml is symlinked into the hermes-state volume by
+# sync-hermes-state.sh. These RUN lines set the initial defaults; the
+# volume preserves any runtime changes. Idempotent; safe across rebuilds.
 RUN hermes config set memory.provider mem0
 
 # ---- Display: silence inter-tool commentary -------------------------------
@@ -269,8 +264,8 @@ RUN hermes config set memory.provider mem0
 # (and tool-progress edits, if enabled) gets posted. The user can still see
 # everything via `hermes logs`.
 #
-# Same write-to-config rationale as memory.provider above: only .hermes/data
-# is volume-mounted, so config is baked in at image build time.
+# Same write-to-config rationale as memory.provider above: config.yaml lives
+# on the hermes-state volume. Image defaults are seeded on first boot.
 RUN hermes config set display.interim_assistant_messages false
 
 # ---- Display: silence tool-progress notifications -------------------------
@@ -286,9 +281,8 @@ RUN hermes config set display.interim_assistant_messages false
 # thing that lands in chat. The CLI / `hermes logs` still see everything.
 # Other valid values: `new` (only on tool change), `all` (default), `verbose`.
 #
-# Same write-to-config rationale as the lines above: only .hermes/data is
-# volume-mounted, so config written by `hermes config set` at runtime is
-# wiped on every container recreate. Bake it into the image.
+# Same write-to-config rationale as the lines above: config.yaml lives on
+# the hermes-state volume, seeded from image defaults on first boot.
 RUN hermes config set display.tool_progress off
 
 COPY --chown=honeybot:honeybot skills/         ./.hermes/skills/
@@ -299,6 +293,7 @@ COPY --chown=honeybot:honeybot skills/         ./.hermes/skills/
 # ~/.hermes/hooks/, every per-user skill (Gmail, AWS, HubSpot) fails closed.
 COPY --chown=honeybot:honeybot hooks/          ./.hermes/hooks/
 COPY --chown=honeybot:honeybot .env.schema     ./
+COPY --chmod=0755 --chown=honeybot:honeybot scripts/sync-hermes-state.sh ./sync-hermes-state.sh
 COPY --chmod=0755 --chown=honeybot:honeybot scripts/seed-vault.sh        ./seed-vault.sh
 # emit-runtime-env.sh writes /repo/.env.runtime from the `secrets-init`
 # one-shot compose service (same image, different entrypoint). See
@@ -345,14 +340,17 @@ RUN printf '{"git_sha":"%s","git_branch":"%s","build_time":"%s"}\n' \
 
 # ---- Entrypoint ------------------------------------------------------------
 # On every boot:
-#   1. seed-vault.sh: idempotently ensure every 1Password item referenced
+#   1. sync-hermes-state.sh: symlink persistent state files into the
+#      hermes-state volume so sessions, config, auth, skills, and cron
+#      jobs survive container rebuilds. Seeds defaults on first boot.
+#   2. seed-vault.sh: idempotently ensure every 1Password item referenced
 #      by .env.schema exists in the Honeybot vault. Uses the service
 #      account token; no human signin or vault creation.
-#   2. varlock run: read .env.schema, resolve op(...) via
+#   3. varlock run: read .env.schema, resolve op(...) via
 #      OP_SERVICE_ACCOUNT_TOKEN, export validated env to the child.
-#   3. hermes gateway: Slack Socket Mode front door.
+#   4. hermes gateway: Slack Socket Mode front door.
 # If seed-vault fails (vault unreachable, token bad), the container fails
 # fast before varlock gets a chance to produce confusing error cascades.
 # Use shell form so PWD stays in sync if anything cd's underneath us.
-ENTRYPOINT ["/bin/bash", "-lc", "cd /home/honeybot && ./seed-vault.sh && exec varlock run -- \"$@\"", "--"]
+ENTRYPOINT ["/bin/bash", "-lc", "cd /home/honeybot && ./sync-hermes-state.sh && ./seed-vault.sh && exec varlock run -- \"$@\"", "--"]
 CMD ["hermes", "gateway", "run", "--replace"]

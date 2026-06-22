@@ -143,6 +143,7 @@ RUN rm -f /etc/nginx/conf.d/default.conf
 # explicitly includes from there.
 COPY nginx.conf        /usr/local/openresty/nginx/conf/nginx.conf
 COPY conf.d/           /etc/nginx/conf.d/
+COPY static/           /usr/share/nginx/static/
 
 # Health check: /healthz on port 80, always unconditionally 200.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

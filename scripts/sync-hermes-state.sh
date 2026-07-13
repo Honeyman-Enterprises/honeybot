@@ -46,6 +46,7 @@ PERSISTENT_FILES=(
 MERGE_DIRS=(
   skills
   hooks
+  plugins
 )
 
 echo "sync-hermes-state: state volume at ${STATE_DIR}"

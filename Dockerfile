@@ -292,6 +292,9 @@ COPY --chown=honeybot:honeybot skills/         ./.hermes/skills/
 # that skills/_lib/creds.sh reads. Without this hook installed in
 # ~/.hermes/hooks/, every per-user skill (Gmail, AWS, HubSpot) fails closed.
 COPY --chown=honeybot:honeybot hooks/          ./.hermes/hooks/
+# User plugins. model-prefix-router enables per-message model routing via
+# message prefix (e.g. "opus analyze this" or "gpt-5.6-sol write me a poem").
+COPY --chown=honeybot:honeybot plugins/        ./.hermes/plugins/
 COPY --chown=honeybot:honeybot .env.schema     ./
 COPY --chmod=0755 --chown=honeybot:honeybot scripts/sync-hermes-state.sh      ./sync-hermes-state.sh
 COPY --chmod=0755 --chown=honeybot:honeybot scripts/seed-vault.sh             ./seed-vault.sh

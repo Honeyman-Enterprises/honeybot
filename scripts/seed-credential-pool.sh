@@ -1,85 +1,52 @@
 #!/usr/bin/env bash
-# seed-credential-pool.sh — populate Hermes' auth.json credential pool
-# from environment variables on every boot.
+# seed-credential-pool.sh — ensure Hermes' ~/.hermes/.env has API keys
+# from the varlock-resolved environment, so Hermes' built-in credential
+# pool auto-seeder (agent/credential_pool.py::_seed_from_env) can find
+# them in ~/.hermes/.env even after the process env changes.
 #
-# Called from the ENTRYPOINT after sync-hermes-state.sh (so auth.json is
-# already symlinked into the hermes-state volume) and AFTER varlock has
-# resolved secrets into the environment.
+# Called from the CMD (inside varlock's child process) on every boot,
+# AFTER varlock has resolved op(...) references into the environment.
 #
-# This is NOT a replacement for `hermes auth add` — it covers the case
-# where API keys arrive via environment variables (varlock / 1Password)
-# rather than interactive CLI entry. The credential pool is what lets
-# Hermes switch providers at runtime without re-exporting env vars.
+# Why this exists:
+#   Hermes' credential pool reads ~/.hermes/.env first (via load_env()),
+#   then falls back to os.environ. The varlock env is available in the
+#   current process, but Hermes' .env file lives on the hermes-state
+#   volume and survives container rebuilds. Writing keys there ensures
+#   they're always discoverable regardless of how the process started.
 #
-# Idempotent: existing pool entries are left alone. Only adds providers
-# whose env var is set and non-empty AND aren't already in the pool.
+# Idempotent: existing .env entries are not overwritten.
 
 set -euo pipefail
 
-AUTH_JSON="${HOME}/.hermes/auth.json"
+HERMES_ENV="${HOME}/.hermes/.env"
 
-# Ensure auth.json exists with the minimum structure.
-if [ ! -f "$AUTH_JSON" ]; then
-  echo '{"version": 1, "providers": {}, "credential_pool": {}}' > "$AUTH_JSON"
-  chmod 600 "$AUTH_JSON"
-fi
+# Ensure the file exists
+touch "$HERMES_ENV"
+chmod 600 "$HERMES_ENV"
 
-# Map of provider name → env var containing the API key.
-# Add new providers here as needed.
-declare -A PROVIDERS=(
-  [anthropic]="ANTHROPIC_API_KEY"
-  [openai]="OPENAI_API_KEY"
+# Provider env vars to seed into .env
+VARS=(
+  ANTHROPIC_API_KEY
+  OPENAI_API_KEY
 )
 
-python3 << 'PYEOF'
-import json, os, sys
-from datetime import datetime, timezone
+changed=false
+for var in "${VARS[@]}"; do
+  val="${!var:-}"
+  if [ -z "$val" ]; then
+    continue
+  fi
 
-auth_path = os.path.expanduser("~/.hermes/auth.json")
+  # Don't overwrite existing entries
+  if grep -q "^${var}=" "$HERMES_ENV" 2>/dev/null; then
+    continue
+  fi
 
-try:
-    with open(auth_path) as f:
-        auth = json.load(f)
-except (FileNotFoundError, json.JSONDecodeError):
-    auth = {"version": 1, "providers": {}, "credential_pool": {}}
+  echo "${var}=${val}" >> "$HERMES_ENV"
+  echo "seed-credential-pool: added ${var} to ~/.hermes/.env"
+  changed=true
+done
 
-if "credential_pool" not in auth:
-    auth["credential_pool"] = {}
-
-pool = auth["credential_pool"]
-now = datetime.now(timezone.utc).isoformat()
-
-# Provider → env var mapping
-providers = {
-    "anthropic": "ANTHROPIC_API_KEY",
-    "openai": "OPENAI_API_KEY",
-}
-
-changed = False
-for provider, env_var in providers.items():
-    key = os.environ.get(env_var, "").strip()
-    if not key:
-        continue
-
-    # Check if this provider already has a credential in the pool.
-    existing = pool.get(provider, [])
-    if existing:
-        # Already seeded — don't touch it (user may have rotated keys
-        # via `hermes auth add`).
-        continue
-
-    pool[provider] = [{
-        "api_key": key,
-        "label": f"{provider}-env-seed",
-        "added_at": now,
-    }]
-    changed = True
-    print(f"seed-credential-pool: added {provider} from ${env_var}")
-
-if changed:
-    with open(auth_path, "w") as f:
-        json.dump(auth, f, indent=2)
-    print("seed-credential-pool: auth.json updated")
-else:
-    print("seed-credential-pool: credential pool up to date")
-PYEOF
+if [ "$changed" = false ]; then
+  echo "seed-credential-pool: .env up to date"
+fi

@@ -127,10 +127,15 @@ services:
       HONEYBOT_COMMIT_EMAIL: ${HONEYBOT_COMMIT_EMAIL:-honeybot@noreply.honeymanenterprises.com}
 
     volumes:
-      # Agent memory / FTS / skill state. Must persist across restarts.
-      # (Mounted at .hermes/data because that's where the upstream hermes
-      # runtime writes its state — the path is its convention, not ours.)
-      - honeybot-data:/home/honeybot/.hermes/data
+      # Persistent Hermes state. sync-hermes-state.sh (called from the
+      # entrypoint on every boot) symlinks state.db, config.yaml, auth.json,
+      # skills/, cron/, sessions/, etc. into this volume. On first boot,
+      # image-baked defaults are seeded into the volume; on subsequent boots,
+      # the volume's content wins — so sessions, memory, auth tokens, RL
+      # learning, cron jobs, and agent-created skills all survive container
+      # rebuilds. Image-shipped skills/hooks are merged in on every boot
+      # (new files added, existing user customizations preserved).
+      - hermes-state:/home/honeybot/.hermes/state
       # Self-edit workspace (clone of this repo). The honeybot-dev skill
       # lives here. Persists so a branch survives a container restart.
       - honeybot-workspace:/home/honeybot/workspace
@@ -615,7 +620,12 @@ services:
     networks: [honeynet]
 
 volumes:
-  honeybot-data:
+  # Hermes persistent state: state.db (sessions/FTS), config.yaml, auth.json,
+  # skills/, hooks/, cron/, sessions/, kanban.db, response_store.db (RL), and
+  # gateway routing files. sync-hermes-state.sh symlinks these from ~/.hermes/
+  # into this volume on every boot. Replaces the old honeybot-data volume
+  # (which was mounted at .hermes/data/ — a path Hermes never wrote to).
+  hermes-state:
   honeybot-workspace:
   elasticsearch-data:
   neo4j-data:

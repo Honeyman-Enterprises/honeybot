@@ -1,0 +1,17 @@
+name: model-prefix-router
+label: Model Prefix Router
+kind: hook
+version: 1.0.0
+description: >
+  Routes messages to a specific model when the first word matches a known
+  model alias. E.g. "opus analyze this code" strips "opus" and runs the
+  rest against Claude Opus for that one message. The model override is
+  per-message (single turn) — it resets after the reply.
+
+  Supported prefixes: any alias from hermes_cli.model_switch.MODEL_ALIASES
+  (opus, sonnet, haiku, gpt5, grok, gemini, etc.) plus custom aliases
+  defined in config.yaml model_aliases section. Also supports full model
+  names like "gpt-5.6-sol" or "claude-opus-4-6".
+
+hooks:
+  - pre_gateway_dispatch

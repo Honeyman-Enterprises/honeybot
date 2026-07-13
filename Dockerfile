@@ -293,8 +293,9 @@ COPY --chown=honeybot:honeybot skills/         ./.hermes/skills/
 # ~/.hermes/hooks/, every per-user skill (Gmail, AWS, HubSpot) fails closed.
 COPY --chown=honeybot:honeybot hooks/          ./.hermes/hooks/
 COPY --chown=honeybot:honeybot .env.schema     ./
-COPY --chmod=0755 --chown=honeybot:honeybot scripts/sync-hermes-state.sh ./sync-hermes-state.sh
-COPY --chmod=0755 --chown=honeybot:honeybot scripts/seed-vault.sh        ./seed-vault.sh
+COPY --chmod=0755 --chown=honeybot:honeybot scripts/sync-hermes-state.sh      ./sync-hermes-state.sh
+COPY --chmod=0755 --chown=honeybot:honeybot scripts/seed-vault.sh             ./seed-vault.sh
+COPY --chmod=0755 --chown=honeybot:honeybot scripts/seed-credential-pool.sh   ./seed-credential-pool.sh
 # emit-runtime-env.sh writes /repo/.env.runtime from the `secrets-init`
 # one-shot compose service (same image, different entrypoint). See
 # docker-compose.yml for wiring.
@@ -348,9 +349,16 @@ RUN printf '{"git_sha":"%s","git_branch":"%s","build_time":"%s"}\n' \
 #      account token; no human signin or vault creation.
 #   3. varlock run: read .env.schema, resolve op(...) via
 #      OP_SERVICE_ACCOUNT_TOKEN, export validated env to the child.
-#   4. hermes gateway: Slack Socket Mode front door.
+#   4. seed-credential-pool.sh: populate Hermes' auth.json credential
+#      pool from the now-resolved env vars (ANTHROPIC_API_KEY,
+#      OPENAI_API_KEY, etc.). Runs AFTER varlock so keys are available.
+#      Idempotent: existing pool entries are preserved.
+#   5. hermes gateway: Slack Socket Mode front door.
 # If seed-vault fails (vault unreachable, token bad), the container fails
 # fast before varlock gets a chance to produce confusing error cascades.
-# Use shell form so PWD stays in sync if anything cd's underneath us.
+#
+# seed-credential-pool.sh runs inside the varlock child process (step 4)
+# because it needs the resolved API keys. The CMD is a wrapper script
+# that runs the seeder, then execs into hermes gateway.
 ENTRYPOINT ["/bin/bash", "-lc", "cd /home/honeybot && ./sync-hermes-state.sh && ./seed-vault.sh && exec varlock run -- \"$@\"", "--"]
-CMD ["hermes", "gateway", "run", "--replace"]
+CMD ["/bin/bash", "-c", "cd /home/honeybot && ./seed-credential-pool.sh && exec hermes gateway run --replace"]

@@ -495,6 +495,69 @@ services:
     networks: [honeynet]
 
   # ---------------------------------------------------------------------
+  # voice-relay — voice assistants (Siri / Claude voice / ChatGPT voice)
+  # → honeybot. Thin sidecar; see docs/voice-relay.md and voice-relay/.
+  # ---------------------------------------------------------------------
+  # Fronted by nginx at voice.honeybot.honeymanenterprises.com (no host
+  # port — same posture as openwebui). Drives honeybot's api_server to run
+  # the command, answers inline when fast, and DMs the requester in Slack
+  # when the work outlasts the assistant's response window.
+  #
+  # Secrets (HONEYBOT_API_KEY = HermesAPI bearer, SLACK_BOT_TOKEN,
+  # VOICE_TOKEN_MAP) arrive via .env.runtime, emitted by secrets-init from
+  # 1Password. Non-secret tuning is set in `environment:` below. Do NOT
+  # set the secret vars here — Compose ${} interpolation resolves against
+  # the host shell at parse time and would shadow the env_file values
+  # (the exact bug documented in scripts/emit-runtime-env.sh).
+  voice-relay:
+    build:
+      context: ./voice-relay
+    image: honeybot/voice-relay:local
+    container_name: honeybot-voice-relay
+    restart: unless-stopped
+
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+      honeybot:
+        condition: service_started
+
+    env_file:
+      # HONEYBOT_API_KEY, SLACK_BOT_TOKEN, VOICE_TOKEN_MAP, VOICE_ADMIN_KEY.
+      - path: ./.env.runtime
+        required: false
+
+    environment:
+      VOICE_RELAY_PORT: "8080"
+      # Keep under the assistant's own patience (~5s for Siri).
+      VOICE_FAST_ACK_SECONDS: "3.5"
+      VOICE_AGENT_TIMEOUT_SECONDS: "300"
+      # api_server on the honeybot container (same endpoint openwebui uses).
+      HONEYBOT_API_URL: "http://honeybot:8642/v1"
+      HONEYBOT_MODEL: "honeybot"
+      # Live token map pushed by honeybot's voice-token skill lands here.
+      VOICE_TOKEN_STORE_PATH: "/data/tokens.json"
+
+    volumes:
+      # Persists the live token map across relay restarts (the cold-start
+      # seed still comes from VOICE_TOKEN_MAP in .env.runtime).
+      - voice-relay-data:/data
+
+    # Thin async proxy — a fraction of a core is plenty. Half a CPU and
+    # 256m keep it out of Hermes' way.
+    cpus: 0.5
+    mem_limit: 256m
+    memswap_limit: 256m
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    networks: [honeynet]
+
+  # ---------------------------------------------------------------------
   # elasticsearch — internal only. Backing store for image-ingest MCP.
   # ---------------------------------------------------------------------
   # Security is ENABLED (8.x default). Passwords resolved from 1Password
@@ -507,6 +570,15 @@ services:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
     container_name: honeybot-elasticsearch
     restart: unless-stopped
+
+    # On-demand only. ES backs the image-ingest MCP, which isn't needed
+    # for normal operation, so it does NOT start with a plain
+    # `docker compose up`. Start it explicitly when you need it:
+    #   docker compose up -d elasticsearch          (targets it by name)
+    #   docker compose --profile search up -d       (enables the profile)
+    # Nothing depends_on ES, so gating it here is safe — honeybot,
+    # openwebui, neo4j, and the voice-relay all come up without it.
+    profiles: ["search"]
 
     # Wait for secrets-init to write .env.runtime before creating this
     # container — otherwise compose would error on a missing env_file.
@@ -546,8 +618,13 @@ services:
     ulimits:
       memlock: { soft: -1, hard: -1 }
 
-    mem_limit: 768m
-    memswap_limit: 768m
+    # Heap is pinned to 512m via ES_JAVA_OPTS above; the container needs
+    # roughly heap + Lucene off-heap + JVM overhead, so 1g mem is a safe
+    # ceiling. CPU capped so an ES indexing burst (it's the hungriest of
+    # the auxiliaries) can't starve Hermes. It's on-demand anyway.
+    cpus: 2.0
+    mem_limit: 1g
+    memswap_limit: 1g
 
     healthcheck:
       # $$ defers expansion to the container's shell at runtime, where
@@ -608,8 +685,13 @@ services:
       - neo4j-data:/data
       - neo4j-logs:/logs
 
-    mem_limit: 768m
-    memswap_limit: 768m
+    # Small local graph: heap 256m + pagecache 128m (set above) + JVM
+    # overhead (metaspace, direct buffers, thread stacks) fits comfortably
+    # in 640m. 1 CPU is plenty for a tiny dataset and keeps cores free for
+    # Hermes. Bump both only if the graph grows or queries get heavy.
+    cpus: 1.0
+    mem_limit: 640m
+    memswap_limit: 640m
 
     logging:
       driver: json-file
@@ -635,6 +717,10 @@ volumes:
   # Losing it logs every Open WebUI user out and wipes their chats —
   # but does NOT touch any Hermes data (sessions, memory, skills) which
   # live on honeybot-data above.
+  # voice-relay live token map (pushed by honeybot's voice-token skill).
+  # Small; survives relay restarts so freshly minted tokens aren't lost
+  # between full compose-ups. 1Password remains the durable source of truth.
+  voice-relay-data:
   openwebui-data:
   # Issued TLS certs + ACME account keys for lua-resty-acme. Survives
   # container restarts; losing it forces LE re-issuance on next

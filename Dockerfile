@@ -201,7 +201,18 @@ WORKDIR /home/honeybot
 # Hermes expects config + skills under $HOME/.hermes/ by default.
 # workspace/ is where the honeybot-dev skill clones the bot's own repo so it
 # can open PRs against itself. Isolated from .hermes/ intentionally.
-RUN mkdir -p .hermes/config .hermes/skills .hermes/data workspace
+#
+# .hermes/state (+ sessions/ + cron/) is the mountpoint for the hermes-state
+# named volume (see docker-compose.yml) that sync-hermes-state.sh symlinks
+# into. It MUST be pre-created here, owned by honeybot: Docker copies an
+# image directory's ownership onto a *fresh* named volume only when the
+# mountpoint already exists in the image. Without this line, a brand-new
+# hermes-state volume (any first-boot machine — e.g. a fresh laptop) is
+# created root:root, and sync-hermes-state.sh (running as UID 10001) dies
+# at `mkdir -p state/sessions` with EACCES, crash-looping the container.
+# Pre-creating the subtree makes the fresh volume inherit honeybot:honeybot.
+RUN mkdir -p .hermes/config .hermes/skills .hermes/data \
+             .hermes/state/sessions .hermes/state/cron workspace
 
 # ---- Model provider: Anthropic --------------------------------------------
 # Pin Hermes to Anthropic + Claude Sonnet 4.5. Upstream's default for

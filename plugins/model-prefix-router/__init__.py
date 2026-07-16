@@ -76,6 +76,14 @@ def _try_resolve_model(prefix: str) -> Optional[dict]:
             current_api_key=model_cfg.get("api_key", ""),
         )
         if result and getattr(result, "success", True) and result.new_model:
+            # Only accept if switch_model actually resolved via a known alias
+            # or the model name changed from the current one. Without this
+            # guard, switch_model echoes ANY string back as a "model name"
+            # (e.g. "you" → model=you) which then 404s at the provider.
+            resolved_alias = getattr(result, "resolved_via_alias", "")
+            if not resolved_alias and result.new_model == key:
+                # Not a real alias match — just echo. Reject.
+                return None
             return {
                 "provider": result.target_provider,
                 "model": result.new_model,

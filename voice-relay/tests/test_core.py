@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from voice_relay.config import Config
 from voice_relay.core import Core
-from voice_relay.identity import Identity, UnknownToken
+from voice_relay.identity import TokenStore, UnknownToken
 from voice_relay.registry import Registry
 from voice_relay.types import VoiceRequest
 
@@ -60,13 +60,15 @@ def _config(fast_ack=0.05):
         slack_bot_token="xoxb-test",
         token_map={"tok-eric": "U04ERIC"},
         ack_message="On it — Slack incoming.",
+        token_store_path="",  # no persistence in unit tests
+        admin_key="admin-secret",
     )
 
 
 def _core(honeybot, slack, cfg=None):
     cfg = cfg or _config()
     return Core(
-        identity=Identity(cfg.token_map),
+        identity=TokenStore(cfg.token_map, store_path=None),
         registry=Registry(),
         honeybot=honeybot,
         slack=slack,
@@ -149,6 +151,21 @@ def test_unknown_token_rejected_before_agent():
         assert raised, "unknown token must raise"
         assert hb.calls == 0, "agent must not run for an unknown token"
     asyncio.run(run())
+
+
+def test_token_store_live_replace_takes_effect():
+    # A freshly pushed token resolves immediately; a revoked one stops.
+    store = TokenStore({"tok-eric": "U04ERIC"}, store_path=None)
+    assert store.resolve("tok-eric") == "U04ERIC"
+    store.replace({"tok-eric": "U04ERIC", "tok-michelle": "U05MICHELLE"})
+    assert store.resolve("tok-michelle") == "U05MICHELLE"
+    store.replace({"tok-michelle": "U05MICHELLE"})  # eric revoked
+    raised = False
+    try:
+        store.resolve("tok-eric")
+    except UnknownToken:
+        raised = True
+    assert raised, "revoked token must stop resolving"
 
 
 def _all_tests():

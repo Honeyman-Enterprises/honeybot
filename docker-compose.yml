@@ -523,7 +523,7 @@ services:
         condition: service_started
 
     env_file:
-      # HONEYBOT_API_KEY, SLACK_BOT_TOKEN, VOICE_TOKEN_MAP.
+      # HONEYBOT_API_KEY, SLACK_BOT_TOKEN, VOICE_TOKEN_MAP, VOICE_ADMIN_KEY.
       - path: ./.env.runtime
         required: false
 
@@ -535,6 +535,13 @@ services:
       # api_server on the honeybot container (same endpoint openwebui uses).
       HONEYBOT_API_URL: "http://honeybot:8642/v1"
       HONEYBOT_MODEL: "honeybot"
+      # Live token map pushed by honeybot's voice-token skill lands here.
+      VOICE_TOKEN_STORE_PATH: "/data/tokens.json"
+
+    volumes:
+      # Persists the live token map across relay restarts (the cold-start
+      # seed still comes from VOICE_TOKEN_MAP in .env.runtime).
+      - voice-relay-data:/data
 
     mem_limit: 256m
     memswap_limit: 256m
@@ -688,6 +695,10 @@ volumes:
   # Losing it logs every Open WebUI user out and wipes their chats —
   # but does NOT touch any Hermes data (sessions, memory, skills) which
   # live on honeybot-data above.
+  # voice-relay live token map (pushed by honeybot's voice-token skill).
+  # Small; survives relay restarts so freshly minted tokens aren't lost
+  # between full compose-ups. 1Password remains the durable source of truth.
+  voice-relay-data:
   openwebui-data:
   # Issued TLS certs + ACME account keys for lua-resty-acme. Survives
   # container restarts; losing it forces LE re-issuance on next

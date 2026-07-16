@@ -22,8 +22,13 @@ RUN pip install -r requirements.txt
 COPY voice_relay/ ./voice_relay/
 
 # Non-root runtime user (distinct UID from honeybot's 10001).
+# /data holds the live token map pushed by honeybot's voice-token skill
+# (VOICE_TOKEN_STORE_PATH). Pre-create it owned by `voice` so a fresh
+# named volume inherits that ownership (Docker copies the image dir's
+# ownership onto an empty volume — the same rule that bit .hermes/state).
 RUN useradd -m -u 10002 -s /usr/sbin/nologin voice \
- && chown -R voice:voice /app
+ && mkdir -p /data \
+ && chown -R voice:voice /app /data
 USER voice
 
 EXPOSE 8080

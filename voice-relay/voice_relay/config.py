@@ -26,8 +26,10 @@ class Config:
     honeybot_api_key: str
     honeybot_model: str
     slack_bot_token: str
-    token_map: dict  # bearer token -> Slack UID
+    token_map: dict  # bearer token -> Slack UID (cold-start seed)
     ack_message: str
+    token_store_path: str  # volume file for live admin pushes
+    admin_key: str  # bearer for /admin/* (empty = admin API disabled)
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -49,6 +51,12 @@ class Config:
                 "VOICE_ACK_MESSAGE",
                 "On it — I'll message you in Slack when it's done.",
             ),
+            token_store_path=os.environ.get(
+                "VOICE_TOKEN_STORE_PATH", "/data/tokens.json"
+            ),
+            # honeybot's voice-token skill presents this to /admin/tokens.
+            # Empty disables the admin API entirely (fail-closed surface).
+            admin_key=os.environ.get("VOICE_ADMIN_KEY", ""),
         )
 
 

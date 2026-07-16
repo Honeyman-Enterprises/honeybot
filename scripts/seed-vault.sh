@@ -227,8 +227,14 @@ ensure_item "SMTP" "API Credential" \
 # request 401s until you populate it. Generate a token per person (any
 # opaque high-entropy string) and put it in their Siri Shortcut / MCP
 # config. See docs/voice-relay.md.
+#
+# admin_key authenticates honeybot's voice-token skill to the relay's
+# /admin/tokens endpoint (so a freshly minted token goes live without a
+# relay restart). Auto-generated on first creation — no human involved;
+# it's an internal service-to-service secret, never exposed to users.
 ensure_item "Voice" "API Credential" \
-  'token_map[text]='
+  'token_map[text]=' \
+  "admin_key[password]=$(gen_pw 32)"
 
 # ---------------------------------------------------------------------------
 # OpenWebUI — secret key for signing its session cookies / JWTs.

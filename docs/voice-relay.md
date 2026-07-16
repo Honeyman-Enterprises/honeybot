@@ -213,16 +213,44 @@ answered.
 
 Voice clients carry no Slack identity, but we must DM "the person who
 asked." Each requester's Shortcut / MCP config carries a **per-user
-token** that the relay maps to a Slack UID. Fits the existing model
-(`docs/identity-model.md`): a new vault item
+token** that the relay maps to a Slack UID, stored at
+`op://Honeybot/Voice/token_map` (JSON `{token: slack_uid}`).
+`TokenStore.resolve(token)` fails closed on an unknown token — an
+unauthenticated voice request never reaches the agent.
+
+### Self-service token management (built)
+
+Users mint/rotate/revoke their own token by asking honeybot — no script,
+no hand-editing 1Password. The `voice-token` skill
+(`skills/voice-token/`) is the authority:
+
+1. Resolve the caller's Slack UID — **identical to `creds.sh`**: Slack
+   sidecar for Slack sessions, or the **OTP-verified session** for
+   Open WebUI / API. This is why no custom Open WebUI extension is needed:
+   the existing OTP gate (`otp-identity-verification`, PR #33) already
+   binds an Open WebUI user to their Slack UID via email verification —
+   using the same `send_email.py` relay from `docs/email-verification.md`.
+2. Read/modify `op://Honeybot/Voice/token_map` (durable source of truth).
+3. **Push the full map to the relay's `/admin/tokens`** (authed by
+   `op://Honeybot/Voice/admin_key`) so a fresh token works immediately —
+   no relay restart.
 
 ```
-op://Honeybot/Voice-{SlackUID}/token
+Slack DM  ─┐
+Open WebUI ┤→ voice-token skill → op://Honeybot/Voice/token_map (truth)
+  (OTP)    ┘                    └→ PUT relay /admin/tokens (live)
 ```
 
-resolved the same way everything else is. `identity.resolve(token)`
-walks these and fails closed on an unknown token — an unauthenticated
-voice request never reaches the agent.
+### How the relay learns tokens
+
+- **cold start**: `VOICE_TOKEN_MAP` env, seeded from op by secrets-init at
+  every compose up.
+- **live**: the skill's `/admin/tokens` push updates the relay in-memory
+  and persists to `voice-relay-data:/data/tokens.json`, so freshly minted
+  tokens survive a relay restart between compose-ups.
+- op is always the durable truth; the env seed + volume are runtime caches.
+- `/admin/tokens` is internal-only (blocked at nginx; the skill reaches it
+  over honeynet) and requires the admin key even so.
 
 ### Open spike: identity into the agent run
 
@@ -274,17 +302,21 @@ proven.
 
 ## Build phases
 
-1. **Phase 1 — HTTP core + Siri, lookups only.** `voice-relay` sidecar,
+1. ✅ **Phase 1 — HTTP core + Siri.** `voice-relay` sidecar,
    `ingress/siri.py`, identity resolve, the race/registry, relay→api_server,
-   relay→Slack DM on timeout. Prove the full fast-ack/async-DM loop with a
-   read-only command ("what's on my calendar"). No per-user-action spike
-   needed yet.
-2. **Phase 2 — MCP ingress.** `ingress/mcp.py` exposing `ask_honeybot`;
-   wire Claude voice + ChatGPT voice. Same core.
+   relay→Slack DM on timeout. Full fast-ack/async-DM loop; core unit-tested.
+2. ✅ **Phase 2 — MCP ingress + self-service tokens.** `ingress/mcp.py`
+   (`ask_honeybot` over Streamable-HTTP for Claude/ChatGPT voice), the
+   dynamic `TokenStore` + `/admin/tokens` admin API, and the `voice-token`
+   skill (mint/rotate/revoke, op-backed, OTP-gated on Open WebUI). ⚠️ MCP
+   transport needs live verification against a real Claude/ChatGPT
+   connector — the handshake + bearer passing can't be unit-tested.
 3. **Phase 3 — per-user actions.** Resolve the identity-into-api_server
    spike so action commands (website image, AWS, HubSpot) resolve the
    requester's per-user creds. This is the "update my LinkedIn photo on
-   the site" case.
+   the site" case. The relay already sends the requester's UID as the
+   OpenAI `user` field + `X-Honeybot-Slack-User` header; the honeybot side
+   must honor one of them so `creds.sh` resolves per-user credentials.
 4. **Phase 4 — durability & polish.** Back the registry with Honcho/Redis
    for restart survival; per-token rate limits; a fourth adapter to prove
    the plugin layer (e.g. a generic webhook for Home Assistant / Alexa).

@@ -120,6 +120,10 @@ SMTP_MAIL_FROM_NAME="$(read_or_silent 'op://Honeybot/SMTP/mail_from_name')"
 # read_or_warn for the Slack token (relay can't DM without it).
 SLACK_BOT_TOKEN="$(read_or_warn 'op://Honeybot/Slack Bot/bot_token')"
 VOICE_TOKEN_MAP="$(read_or_silent 'op://Honeybot/Voice/token_map')"
+# admin_key: honeybot's voice-token skill presents this to the relay's
+# /admin/tokens endpoint. read_or_warn — without it, live token pushes
+# fail (minted tokens only go live on the next full compose up).
+VOICE_ADMIN_KEY="$(read_or_warn 'op://Honeybot/Voice/admin_key')"
 
 # Write atomically so partial writes can't confuse compose. Empty values
 # are emitted as `KEY=` so compose's env_file parser doesn't choke; the
@@ -191,6 +195,7 @@ umask 077
   #   value as API_SERVER_KEY, emitted under the name the relay reads.
   printf 'SLACK_BOT_TOKEN=%s\n' "$SLACK_BOT_TOKEN"
   printf 'VOICE_TOKEN_MAP=%s\n' "$VOICE_TOKEN_MAP"
+  printf 'VOICE_ADMIN_KEY=%s\n' "$VOICE_ADMIN_KEY"
   printf 'HONEYBOT_API_KEY=%s\n' "$API_SERVER_KEY"
 } > "$TMP"
 mv "$TMP" "$OUT"

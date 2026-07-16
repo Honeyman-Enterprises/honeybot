@@ -6,10 +6,11 @@ import logging
 
 from fastapi import FastAPI
 
+from voice_relay.admin import mount_admin
 from voice_relay.config import Config
 from voice_relay.core import Core
 from voice_relay.honeybot_client import HoneybotClient
-from voice_relay.identity import Identity
+from voice_relay.identity import TokenStore
 from voice_relay.ingress import ENABLED_INGRESSES
 from voice_relay.registry import Registry
 from voice_relay.slack_client import SlackClient
@@ -25,8 +26,9 @@ def build_app(config: Config | None = None) -> FastAPI:
     config = config or Config.from_env()
 
     registry = Registry()
+    store = TokenStore(config.token_map, config.token_store_path)
     core = Core(
-        identity=Identity(config.token_map),
+        identity=store,
         registry=registry,
         honeybot=HoneybotClient(
             config.honeybot_api_url,
@@ -47,7 +49,9 @@ def build_app(config: Config | None = None) -> FastAPI:
     @app.get("/status")
     async def status():
         # Non-secret debug view of in-flight requests.
-        return {"in_flight": registry.snapshot()}
+        return {"in_flight": registry.snapshot(), "active_tokens": store.count()}
+
+    mount_admin(app, store, config.admin_key)
 
     for ingress in ENABLED_INGRESSES:
         ingress.mount(app, core)
@@ -55,7 +59,7 @@ def build_app(config: Config | None = None) -> FastAPI:
 
     log.info(
         "voice-relay ready: %d authorized token(s), fast_ack=%.1fs, upstream=%s",
-        len(config.token_map),
+        store.count(),
         config.fast_ack_seconds,
         config.honeybot_api_url,
     )

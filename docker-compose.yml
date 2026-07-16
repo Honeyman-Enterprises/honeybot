@@ -543,6 +543,9 @@ services:
       # seed still comes from VOICE_TOKEN_MAP in .env.runtime).
       - voice-relay-data:/data
 
+    # Thin async proxy — a fraction of a core is plenty. Half a CPU and
+    # 256m keep it out of Hermes' way.
+    cpus: 0.5
     mem_limit: 256m
     memswap_limit: 256m
 
@@ -567,6 +570,15 @@ services:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
     container_name: honeybot-elasticsearch
     restart: unless-stopped
+
+    # On-demand only. ES backs the image-ingest MCP, which isn't needed
+    # for normal operation, so it does NOT start with a plain
+    # `docker compose up`. Start it explicitly when you need it:
+    #   docker compose up -d elasticsearch          (targets it by name)
+    #   docker compose --profile search up -d       (enables the profile)
+    # Nothing depends_on ES, so gating it here is safe — honeybot,
+    # openwebui, neo4j, and the voice-relay all come up without it.
+    profiles: ["search"]
 
     # Wait for secrets-init to write .env.runtime before creating this
     # container — otherwise compose would error on a missing env_file.
@@ -606,8 +618,13 @@ services:
     ulimits:
       memlock: { soft: -1, hard: -1 }
 
-    mem_limit: 768m
-    memswap_limit: 768m
+    # Heap is pinned to 512m via ES_JAVA_OPTS above; the container needs
+    # roughly heap + Lucene off-heap + JVM overhead, so 1g mem is a safe
+    # ceiling. CPU capped so an ES indexing burst (it's the hungriest of
+    # the auxiliaries) can't starve Hermes. It's on-demand anyway.
+    cpus: 2.0
+    mem_limit: 1g
+    memswap_limit: 1g
 
     healthcheck:
       # $$ defers expansion to the container's shell at runtime, where
@@ -668,8 +685,13 @@ services:
       - neo4j-data:/data
       - neo4j-logs:/logs
 
-    mem_limit: 768m
-    memswap_limit: 768m
+    # Small local graph: heap 256m + pagecache 128m (set above) + JVM
+    # overhead (metaspace, direct buffers, thread stacks) fits comfortably
+    # in 640m. 1 CPU is plenty for a tiny dataset and keeps cores free for
+    # Hermes. Bump both only if the graph grows or queries get heavy.
+    cpus: 1.0
+    mem_limit: 640m
+    memswap_limit: 640m
 
     logging:
       driver: json-file

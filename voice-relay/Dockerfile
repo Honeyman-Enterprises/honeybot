@@ -22,13 +22,23 @@ RUN pip install -r requirements.txt
 COPY voice_relay/ ./voice_relay/
 
 # Non-root runtime user (distinct UID from honeybot's 10001).
+#
+# NB: python:3.12-slim (debian bookworm-slim) does NOT ship the `passwd`
+# package (priority "important" — slim keeps only "required"), so `useradd`
+# isn't available and we don't want to apt-install it just for one service
+# account. Append the user/group to /etc/passwd + /etc/group directly:
+# deterministic, dependency-free, and all this service needs. Home is /app
+# (already exists, chowned below); shell is nologin because the container
+# only ever runs `python -m voice_relay`, never a login shell.
+#
 # /data holds the live token map pushed by honeybot's voice-token skill
-# (VOICE_TOKEN_STORE_PATH). Pre-create it owned by `voice` so a fresh
+# (VOICE_TOKEN_STORE_PATH). Pre-create it owned by voice (10002) so a fresh
 # named volume inherits that ownership (Docker copies the image dir's
 # ownership onto an empty volume — the same rule that bit .hermes/state).
-RUN useradd -m -u 10002 -s /usr/sbin/nologin voice \
+RUN echo 'voice:x:10002:10002::/app:/usr/sbin/nologin' >> /etc/passwd \
+ && echo 'voice:x:10002:' >> /etc/group \
  && mkdir -p /data \
- && chown -R voice:voice /app /data
+ && chown -R 10002:10002 /app /data
 USER voice
 
 EXPOSE 8080

@@ -216,6 +216,21 @@ ensure_item "SMTP" "API Credential" \
   'mail_from_name[text]='
 
 # ---------------------------------------------------------------------------
+# Voice — per-user token map for the voice-relay sidecar.
+# ---------------------------------------------------------------------------
+# token_map is a compact JSON object mapping a per-user bearer token to
+# that user's Slack UID, e.g.:
+#   {"tok_eric_abc123":"U04ERIC","tok_michelle_def456":"U05MICHELLE"}
+# The voice-relay reads it (via VOICE_TOKEN_MAP in .env.runtime) to
+# authenticate inbound voice requests and to know whom to DM in Slack on
+# late completion. Empty (the seeded default) = fail-closed: every voice
+# request 401s until you populate it. Generate a token per person (any
+# opaque high-entropy string) and put it in their Siri Shortcut / MCP
+# config. See docs/voice-relay.md.
+ensure_item "Voice" "API Credential" \
+  'token_map[text]='
+
+# ---------------------------------------------------------------------------
 # OpenWebUI — secret key for signing its session cookies / JWTs.
 # ---------------------------------------------------------------------------
 # Open WebUI bakes WEBUI_SECRET_KEY into the JWT signing it uses for its

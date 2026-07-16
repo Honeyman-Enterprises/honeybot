@@ -107,6 +107,20 @@ SMTP_MAIL_FROM="$(read_or_warn 'op://Honeybot/SMTP/mail_from')"
 # downstream in docker-compose.yml.
 SMTP_MAIL_FROM_NAME="$(read_or_silent 'op://Honeybot/SMTP/mail_from_name')"
 
+# Voice relay — consumed by the voice-relay sidecar (not Varlock-aware),
+# so its secrets come through .env.runtime like ES/Neo4j/openwebui.
+#   SLACK_BOT_TOKEN : DM the requester on late completion (bot token,
+#                     same value honeybot uses via varlock).
+#   VOICE_TOKEN_MAP : per-user token→Slack-UID JSON (fail-closed if empty;
+#                     the relay 401s every request until populated).
+#   HONEYBOT_API_KEY: bearer the relay presents to honeybot's api_server —
+#                     the same HermesAPI key openwebui uses (API_SERVER_KEY
+#                     above). Emitted under the name the relay expects.
+# read_or_silent for the token map (empty is a valid resting state);
+# read_or_warn for the Slack token (relay can't DM without it).
+SLACK_BOT_TOKEN="$(read_or_warn 'op://Honeybot/Slack Bot/bot_token')"
+VOICE_TOKEN_MAP="$(read_or_silent 'op://Honeybot/Voice/token_map')"
+
 # Write atomically so partial writes can't confuse compose. Empty values
 # are emitted as `KEY=` so compose's env_file parser doesn't choke; the
 # downstream container sees an empty env var and fails its own startup
@@ -168,6 +182,16 @@ umask 077
   # Keep internal names for any future non-OpenWebUI consumer.
   printf 'SMTP_MAIL_FROM=%s\n' "$SMTP_MAIL_FROM"
   printf 'SMTP_MAIL_FROM_NAME=%s\n' "$SMTP_MAIL_FROM_NAME"
+
+  # ---- voice-relay ----
+  # SLACK_BOT_TOKEN: the relay DMs the requester on late completion.
+  # VOICE_TOKEN_MAP: per-user token→Slack-UID JSON (single line; compact
+  #   JSON has no spaces so it survives env_file's line-literal parsing).
+  # HONEYBOT_API_KEY: the relay's bearer to honeybot's api_server — same
+  #   value as API_SERVER_KEY, emitted under the name the relay reads.
+  printf 'SLACK_BOT_TOKEN=%s\n' "$SLACK_BOT_TOKEN"
+  printf 'VOICE_TOKEN_MAP=%s\n' "$VOICE_TOKEN_MAP"
+  printf 'HONEYBOT_API_KEY=%s\n' "$API_SERVER_KEY"
 } > "$TMP"
 mv "$TMP" "$OUT"
 chmod 600 "$OUT"

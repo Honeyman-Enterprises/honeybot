@@ -110,4 +110,19 @@ for dir in "${MERGE_DIRS[@]}"; do
   fi
 done
 
+# --- Ensure image-shipped plugins are enabled --------------------------------
+# Plugin code is merged into the volume above, but existing volumes may have
+# a config.yaml that predates the plugin. `hermes plugins enable` is
+# idempotent — it's a no-op if the plugin is already enabled. This catches
+# the "volume predates the image that shipped the plugin" upgrade path.
+for plugin_dir in "${STATE_DIR}/plugins"/*/; do
+  [ -d "${plugin_dir}" ] || continue
+  plugin_name="$(basename "${plugin_dir}")"
+  # Only auto-enable plugins that ship a plugin.yaml (image-baked plugins).
+  # Skip agent-created or manually placed directories without one.
+  if [ -f "${plugin_dir}/plugin.yaml" ]; then
+    hermes plugins enable "${plugin_name}" 2>/dev/null || true
+  fi
+done
+
 echo "sync-hermes-state: done"

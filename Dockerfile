@@ -306,6 +306,16 @@ COPY --chown=honeybot:honeybot hooks/          ./.hermes/hooks/
 # User plugins. model-prefix-router enables per-message model routing via
 # message prefix (e.g. "opus analyze this" or "gpt-5.6-sol write me a poem").
 COPY --chown=honeybot:honeybot plugins/        ./.hermes/plugins/
+
+# ---- Enable plugins --------------------------------------------------------
+# Plugin code is COPY'd above, but Hermes plugins are opt-in — they must be
+# explicitly enabled via `hermes plugins enable` which writes to config.yaml.
+# Without this step, the plugin sits on disk but never loads. Same volume-
+# seeding story as the config lines above: on first boot this config is
+# seeded into the hermes-state volume; subsequent boots preserve the volume's
+# version (so runtime `hermes plugins enable/disable` changes survive).
+RUN hermes plugins enable model-prefix-router
+
 COPY --chown=honeybot:honeybot .env.schema     ./
 COPY --chmod=0755 --chown=honeybot:honeybot scripts/sync-hermes-state.sh      ./sync-hermes-state.sh
 COPY --chmod=0755 --chown=honeybot:honeybot scripts/seed-vault.sh             ./seed-vault.sh

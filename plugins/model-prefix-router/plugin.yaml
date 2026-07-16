@@ -1,6 +1,6 @@
 name: model-prefix-router
 label: Model Prefix Router
-kind: hook
+kind: standalone
 version: 1.0.0
 description: >
   Routes messages to a specific model when the first word matches a known

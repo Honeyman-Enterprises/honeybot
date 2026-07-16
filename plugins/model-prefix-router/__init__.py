@@ -53,23 +53,13 @@ def _try_resolve_model(prefix: str) -> Optional[dict]:
     """Try to resolve a prefix to a model+provider.
 
     Returns {"model": ..., "provider": ...} or None if no match.
-    """
-    if _ALIASES is None:
-        _load_aliases()
 
+    Uses switch_model() for all resolution — it handles built-in aliases,
+    user aliases, and full model names uniformly, and returns the exact
+    model string + provider the gateway needs.
+    """
     key = prefix.lower().strip()
 
-    # 1. Check built-in aliases (opus, sonnet, haiku, gpt5, etc.)
-    if key in _ALIASES:
-        identity = _ALIASES[key]
-        return {"provider": identity.provider, "model": identity.model}
-
-    # 2. Check user direct aliases
-    if _DIRECT_ALIASES and key in _DIRECT_ALIASES:
-        da = _DIRECT_ALIASES[key]
-        return {"provider": da.provider, "model": da.model, "base_url": da.base_url}
-
-    # 3. Try as a full model name via switch_model resolution
     try:
         from hermes_cli.model_switch import switch_model
         from hermes_cli.config import load_config
@@ -79,15 +69,13 @@ def _try_resolve_model(prefix: str) -> Optional[dict]:
             model_cfg = {"default": model_cfg}
 
         result = switch_model(
-            model_input=key,
-            explicit_provider=None,
-            current_model=model_cfg.get("default", ""),
+            raw_input=key,
             current_provider=model_cfg.get("provider", ""),
+            current_model=model_cfg.get("default", ""),
             current_base_url=model_cfg.get("base_url", ""),
             current_api_key=model_cfg.get("api_key", ""),
-            user_config=cfg,
         )
-        if result and result.new_model:
+        if result and getattr(result, "success", True) and result.new_model:
             return {
                 "provider": result.target_provider,
                 "model": result.new_model,

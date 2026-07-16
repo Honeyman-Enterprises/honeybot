@@ -248,6 +248,20 @@ ensure_item "OpenWebUI" "API Credential" \
   "secret_key[password]=$(gen_pw 48)"
 
 # ---------------------------------------------------------------------------
+# OpenWebUI Google OAuth — "Login with Google" for the Open WebUI frontend.
+# ---------------------------------------------------------------------------
+# A Google Cloud OAuth 2.0 *Web application* client (distinct from the
+# per-user Gmail/Calendar OAuth client at op://Honeybot/GoogleOAuth/, which
+# is a Desktop/device client for a different flow). Fill both fields from
+# the Google Cloud Console; empty = the Google button just doesn't appear
+# and Open WebUI still boots. Redirect URI to register on the client:
+#   https://honeybot.honeymanenterprises.com/oauth/google/callback
+# See docs/openwebui-google-oauth.md for the click-path.
+ensure_item "OpenWebUI Google OAuth" "API Credential" \
+  'client_id[text]=' \
+  'client_secret[password]='
+
+# ---------------------------------------------------------------------------
 # GitHub Bot — GitHub App credentials for the bot's own repo operations.
 # ---------------------------------------------------------------------------
 # This is a GitHub App (NOT a personal access token). The fields (app_id,

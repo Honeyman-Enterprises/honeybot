@@ -90,6 +90,13 @@ NEO4J_AUTH="$(read_or_warn 'op://Honeybot/Neo4j/auth')"
 OPENWEBUI_SECRET_KEY="$(read_or_warn 'op://Honeybot/OpenWebUI/secret_key')"
 API_SERVER_KEY="$(read_or_warn 'op://Honeybot/HermesAPI/key')"
 
+# Open WebUI "Login with Google" (OIDC). Optional — empty means the Google
+# button doesn't render and Open WebUI still boots, so read_or_silent (no
+# warning, no missing-count bump). The item is a Google Cloud *Web app*
+# OAuth client; see docs/openwebui-google-oauth.md.
+GOOGLE_CLIENT_ID="$(read_or_silent 'op://Honeybot/OpenWebUI Google OAuth/client_id')"
+GOOGLE_CLIENT_SECRET="$(read_or_silent 'op://Honeybot/OpenWebUI Google OAuth/client_secret')"
+
 # SMTP — consumed by the openwebui service for password-reset / email
 # verification flows (and any future surface that wants to send mail; see
 # skills/honeybot-dev/references/smtp-plan.md). Open WebUI is not Varlock-
@@ -173,6 +180,11 @@ umask 077
   # Keep the internal names too — compose's redeploy service and future
   # consumers may reference them directly.
   printf 'OPENWEBUI_SECRET_KEY=%s\n' "$OPENWEBUI_SECRET_KEY"
+
+  # ---- Open WebUI Google OAuth ----
+  # Exact var names Open WebUI reads; empty => Google login disabled.
+  printf 'GOOGLE_CLIENT_ID=%s\n' "$GOOGLE_CLIENT_ID"
+  printf 'GOOGLE_CLIENT_SECRET=%s\n' "$GOOGLE_CLIENT_SECRET"
 
   # ---- SMTP (Open WebUI env var names) ----
   printf 'SMTP_HOST=%s\n' "$SMTP_HOST"

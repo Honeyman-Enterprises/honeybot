@@ -452,6 +452,27 @@ services:
       # links use https:// and the right host instead of http://openwebui:8080.
       WEBUI_AUTH_TRUSTED_EMAIL_HEADER: ""
 
+      # ---- Google OAuth ("Login with Google") --------------------------
+      # GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET come from .env.runtime
+      # (emitted by secrets-init from op://Honeybot/OpenWebUI Google OAuth/).
+      # Do NOT set them here — a Compose ${} override resolves against the
+      # host shell at parse time and would shadow the env_file value (same
+      # trap as the SMTP + API-key vars). The non-secret toggles are safe
+      # here. Empty client id/secret => the Google button simply doesn't
+      # appear; Open WebUI still boots. See docs/openwebui-google-oauth.md.
+      ENABLE_OAUTH_SIGNUP: "true"
+      # Merge a Google login into an existing account with the same email
+      # (e.g. the password account you bootstrapped as admin). Safe because
+      # OAUTH_ALLOWED_DOMAINS restricts to our verified Workspace domain —
+      # Google-asserted emails there are trustworthy.
+      OAUTH_MERGE_ACCOUNTS_BY_EMAIL: "true"
+      # Only @honeymanenterprises.com Google accounts may sign in. Belt-and-
+      # suspenders with an Internal OAuth consent screen on the Google side.
+      OAUTH_ALLOWED_DOMAINS: "honeymanenterprises.com"
+      # Explicit callback (Open WebUI otherwise derives it from WEBUI_URL).
+      # Must EXACTLY match the redirect URI registered on the Google client.
+      GOOGLE_REDIRECT_URI: "https://honeybot.honeymanenterprises.com/oauth/google/callback"
+
       # ---- SMTP (outbound mail) ----------------------------------------
       # All SMTP_* values come from .env.runtime (emitted by secrets-init
       # from 1Password). Do NOT set them here in `environment:` — that

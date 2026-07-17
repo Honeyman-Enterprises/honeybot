@@ -1,50 +1,36 @@
 # syntax=docker/dockerfile:1.7
 #
-# voice-relay — thin sidecar that bridges voice assistants (Siri, Claude
-# voice, ChatGPT voice) to honeybot. See docs/voice-relay.md.
+# voice-relay (TypeScript). Multi-stage: the build stage runs `tsc` (strict),
+# so a type error fails the image build — the compile-time gate that motivated
+# the port from Python. The runtime stage ships only dist/ + prod deps.
 #
-# Multi-arch (amd64 + arm64) via the stdlib-only + pip wheels below; no
-# arch-specific binaries. Runs as a non-root user, no secrets baked in —
-# token map / Slack token / api_server key arrive at runtime via env
-# (.env.runtime, emitted by the secrets-init compose service).
+# Runs as the stock `node` user (uid 1000). /data is the persisted store
+# volume (voice tokens + oauth state); pre-created + chowned so a fresh named
+# volume inherits node's ownership.
 
-FROM python:3.12-slim AS base
-
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
-
+FROM node:22-slim AS build
 WORKDIR /app
+COPY package.json package-lock.json* ./
+# npm install (not `npm ci`): no lockfile is committed yet — the host is
+# Docker-first (no local node/npm to generate one). To pin later: copy the
+# build-generated /app/package-lock.json out, commit it, switch to `npm ci`.
+RUN npm install
+COPY tsconfig.json ./
+COPY src ./src
+COPY test ./test
+# tsc (strict) is the type gate; the tests run the race/registry logic. A
+# failure in either fails the image build — the container IS the CI.
+RUN npm run build && npm test
 
-COPY requirements.txt ./
-RUN pip install -r requirements.txt
-
-COPY voice_relay/ ./voice_relay/
-
-# Non-root runtime user (distinct UID from honeybot's 10001).
-#
-# NB: python:3.12-slim (debian bookworm-slim) does NOT ship the `passwd`
-# package (priority "important" — slim keeps only "required"), so `useradd`
-# isn't available and we don't want to apt-install it just for one service
-# account. Append the user/group to /etc/passwd + /etc/group directly:
-# deterministic, dependency-free, and all this service needs. Home is /app
-# (already exists, chowned below); shell is nologin because the container
-# only ever runs `python -m voice_relay`, never a login shell.
-#
-# /data holds the live token map pushed by honeybot's voice-token skill
-# (VOICE_TOKEN_STORE_PATH). Pre-create it owned by voice (10002) so a fresh
-# named volume inherits that ownership (Docker copies the image dir's
-# ownership onto an empty volume — the same rule that bit .hermes/state).
-RUN echo 'voice:x:10002:10002::/app:/usr/sbin/nologin' >> /etc/passwd \
- && echo 'voice:x:10002:' >> /etc/group \
- && mkdir -p /data \
- && chown -R 10002:10002 /app /data
-USER voice
-
+FROM node:22-slim AS runtime
+ENV NODE_ENV=production
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm install --omit=dev && npm cache clean --force
+COPY --from=build /app/dist ./dist
+RUN mkdir -p /data && chown -R node:node /app /data
+USER node
 EXPOSE 8080
-
-# Liveness: the /healthz route returns 200 once ingresses are mounted.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/healthz').status==200 else 1)"
-
-CMD ["python", "-m", "voice_relay"]
+  CMD node -e "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+CMD ["node", "dist/index.js"]

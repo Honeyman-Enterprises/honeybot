@@ -1,8 +1,0 @@
-# voice-relay runtime deps. Pin deliberately; bump with intent.
-fastapi==0.115.5
-uvicorn[standard]==0.32.1
-httpx==0.27.2
-pydantic==2.9.2
-# MCP ingress (Claude/ChatGPT voice). The ingress degrades to a no-op if
-# this import fails, so the HTTP/Siri path never depends on it.
-mcp==1.9.4

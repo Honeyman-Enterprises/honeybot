@@ -62,6 +62,11 @@ def _config(fast_ack=0.05):
         ack_message="On it — Slack incoming.",
         token_store_path="",  # no persistence in unit tests
         admin_key="admin-secret",
+        public_url="https://voice.honeybot.honeymanenterprises.com",
+        oauth_google_client_id="",
+        oauth_google_client_secret="",
+        oauth_allowed_domains={"honeymanenterprises.com"},
+        oauth_store_path="",
     )
 
 

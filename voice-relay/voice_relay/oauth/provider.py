@@ -19,6 +19,7 @@ Security properties (for review):
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 import time
 import urllib.parse
@@ -91,14 +92,17 @@ class HoneybotOAuthProvider:
         if not pending:
             raise ValueError("unknown or expired authorization state")
 
-        email = google.exchange_code_for_email(
+        # Google exchange + Slack lookup are blocking urllib — run them off
+        # the event loop so a login doesn't stall the relay.
+        email = await asyncio.to_thread(
+            google.exchange_code_for_email,
             code=code, client_id=self._gid,
             client_secret=self._gsecret, redirect_uri=self._google_redirect,
         )
         domain = email.rsplit("@", 1)[-1]
         if not self._domains or domain not in self._domains:
             raise PermissionError(f"email domain not allowed: {email}")
-        uid = self._resolve_uid(email)
+        uid = await asyncio.to_thread(self._resolve_uid, email)
         if not uid:
             raise PermissionError(f"no Slack user for {email}")
 

@@ -30,6 +30,18 @@ class Config:
     ack_message: str
     token_store_path: str  # volume file for live admin pushes
     admin_key: str  # bearer for /admin/* (empty = admin API disabled)
+    # --- MCP OAuth (self-hosted authorization server, Google upstream) ---
+    public_url: str            # issuer, e.g. https://voice.honeybot.honeymanenterprises.com
+    oauth_google_client_id: str
+    oauth_google_client_secret: str
+    oauth_allowed_domains: set
+    oauth_store_path: str
+
+    @property
+    def oauth_enabled(self) -> bool:
+        # Dormant until a Google client is configured. When off, MCP falls
+        # back to the static-bearer (voice-token) path.
+        return bool(self.oauth_google_client_id and self.oauth_google_client_secret)
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -57,6 +69,17 @@ class Config:
             # honeybot's voice-token skill presents this to /admin/tokens.
             # Empty disables the admin API entirely (fail-closed surface).
             admin_key=os.environ.get("VOICE_ADMIN_KEY", ""),
+            public_url=os.environ.get(
+                "VOICE_PUBLIC_URL", "https://voice.honeybot.honeymanenterprises.com"
+            ).rstrip("/"),
+            oauth_google_client_id=os.environ.get("VOICE_OAUTH_GOOGLE_CLIENT_ID", ""),
+            oauth_google_client_secret=os.environ.get("VOICE_OAUTH_GOOGLE_CLIENT_SECRET", ""),
+            oauth_allowed_domains={
+                d.strip().lower()
+                for d in os.environ.get("VOICE_OAUTH_ALLOWED_DOMAINS", "honeymanenterprises.com").split(",")
+                if d.strip()
+            },
+            oauth_store_path=os.environ.get("VOICE_OAUTH_STORE_PATH", "/data/oauth.json"),
         )
 
 

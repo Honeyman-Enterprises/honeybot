@@ -12,6 +12,7 @@ from voice_relay.core import Core
 from voice_relay.honeybot_client import HoneybotClient
 from voice_relay.identity import TokenStore
 from voice_relay.ingress import ENABLED_INGRESSES
+from voice_relay.ingress.mcp import build_mcp_app
 from voice_relay.registry import Registry
 from voice_relay.slack_client import SlackClient
 
@@ -57,10 +58,20 @@ def build_app(config: Config | None = None) -> FastAPI:
         ingress.mount(app, core)
         log.info("mounted ingress: %s", ingress.name)
 
+    # MCP is mounted LAST at "/" so its OAuth discovery + endpoints live at
+    # the root of the voice subdomain, while the explicit routes above
+    # (healthz, status, admin, siri) still win for their exact paths. When
+    # the SDK is missing or MCP fails to build, this is None and the relay
+    # serves HTTP/Siri only.
+    mcp_app = build_mcp_app(core, config)
+    if mcp_app is not None:
+        app.mount("/", mcp_app)
+
     log.info(
-        "voice-relay ready: %d authorized token(s), fast_ack=%.1fs, upstream=%s",
+        "voice-relay ready: %d token(s), fast_ack=%.1fs, upstream=%s, oauth=%s",
         store.count(),
         config.fast_ack_seconds,
         config.honeybot_api_url,
+        "on" if config.oauth_enabled else "off",
     )
     return app

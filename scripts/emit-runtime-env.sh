@@ -100,6 +100,14 @@ API_SERVER_KEY="$(read_or_warn 'op://Honeybot/HermesAPI/key')"
 GOOGLE_CLIENT_ID="$(read_or_silent 'op://Honeybot/GoogleOAuth-OpenWebUI/client_id')"
 GOOGLE_CLIENT_SECRET="$(read_or_silent 'op://Honeybot/GoogleOAuth-OpenWebUI/secret_id')"
 
+# Voice-relay self-hosted MCP OAuth server (Google upstream). Empty = the
+# OAuth server stays dormant and MCP falls back to the static voice-token
+# bearer, so read_or_silent. Item is a THIRD Google *Web* client (redirect
+# https://voice.honeybot.honeymanenterprises.com/oauth/callback). See
+# docs/voice-relay-oauth.md.
+VOICE_OAUTH_GOOGLE_CLIENT_ID="$(read_or_silent 'op://Honeybot/GoogleOAuth-VoiceRelay/client_id')"
+VOICE_OAUTH_GOOGLE_CLIENT_SECRET="$(read_or_silent 'op://Honeybot/GoogleOAuth-VoiceRelay/secret_id')"
+
 # SMTP — consumed by the openwebui service for password-reset / email
 # verification flows (and any future surface that wants to send mail; see
 # skills/honeybot-dev/references/smtp-plan.md). Open WebUI is not Varlock-
@@ -188,6 +196,10 @@ umask 077
   # Exact var names Open WebUI reads; empty => Google login disabled.
   printf 'GOOGLE_CLIENT_ID=%s\n' "$GOOGLE_CLIENT_ID"
   printf 'GOOGLE_CLIENT_SECRET=%s\n' "$GOOGLE_CLIENT_SECRET"
+
+  # ---- voice-relay MCP OAuth (Google upstream) ----
+  printf 'VOICE_OAUTH_GOOGLE_CLIENT_ID=%s\n' "$VOICE_OAUTH_GOOGLE_CLIENT_ID"
+  printf 'VOICE_OAUTH_GOOGLE_CLIENT_SECRET=%s\n' "$VOICE_OAUTH_GOOGLE_CLIENT_SECRET"
 
   # ---- SMTP (Open WebUI env var names) ----
   printf 'SMTP_HOST=%s\n' "$SMTP_HOST"

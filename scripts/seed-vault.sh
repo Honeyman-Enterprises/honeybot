@@ -265,6 +265,19 @@ ensure_item "GoogleOAuth-OpenWebUI" "API Credential" \
   'secret_id[password]='
 
 # ---------------------------------------------------------------------------
+# GoogleOAuth-VoiceRelay — Google login behind the voice-relay's self-hosted
+# MCP OAuth server (phone connectors). A THIRD distinct Google Cloud *Web*
+# client (separate from GoogleOAuth = Gmail CLI Desktop, and
+# GoogleOAuth-OpenWebUI = Open WebUI login). Redirect URI to register:
+#   https://voice.honeybot.honeymanenterprises.com/oauth/callback
+# Empty = the relay's OAuth server stays dormant (MCP falls back to the
+# static voice-token bearer). See docs/voice-relay-oauth.md. Field names
+# match the item created by hand: client_id + secret_id.
+ensure_item "GoogleOAuth-VoiceRelay" "API Credential" \
+  'client_id[text]=' \
+  'secret_id[password]='
+
+# ---------------------------------------------------------------------------
 # GitHub Bot — GitHub App credentials for the bot's own repo operations.
 # ---------------------------------------------------------------------------
 # This is a GitHub App (NOT a personal access token). The fields (app_id,

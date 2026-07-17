@@ -1,19 +1,15 @@
 """Ingress plugin layer.
 
-Each ingress is a transport binding for one class of voice client. It
-parses that client's inbound shape into a VoiceRequest, calls
-core.handle(), and shapes the VoiceReply back. Adding a new client is a
-new module here + one line in ENABLED_INGRESSES — the core never changes.
+Each ingress is a transport binding that adds routes to the relay's FastAPI
+app (parse client shape → VoiceRequest → core.handle → shape reply back).
+
+MCP is special: it is NOT in this list because it must be mounted at the
+ROOT of the app (its OAuth discovery + endpoints live at root). app.py
+builds it via ingress.mcp.build_mcp_app() and mounts it last.
 """
 
-from voice_relay.ingress.mcp import McpIngress
 from voice_relay.ingress.siri import SiriIngress
 
-# The active ingress set. Adding a client = a new module here + one entry.
-#   SiriIngress — HTTP POST /v1/voice/ask (Siri Shortcuts, any HTTP client)
-#   McpIngress  — MCP /mcp (Claude voice, ChatGPT voice; degrades to no-op
-#                 if the mcp SDK isn't installed)
 ENABLED_INGRESSES = [
     SiriIngress(),
-    McpIngress(),
 ]

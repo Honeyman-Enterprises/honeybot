@@ -32,8 +32,10 @@ class Core:
 
     async def handle(self, req: VoiceRequest) -> VoiceReply:
         # Resolve identity first — an unknown token never reaches the agent.
-        # (Raises UnknownToken; the ingress maps that to 401.)
-        slack_uid = self.identity.resolve(req.token)
+        # OAuth requests arrive with a pre-resolved UID (from the validated
+        # access token); static-bearer requests resolve the token via the
+        # TokenStore (raises UnknownToken; the ingress maps that to 401).
+        slack_uid = req.slack_uid or self.identity.resolve(req.token)
         self.registry.open(req.request_id, slack_uid, req.text, req.client)
 
         # The agent run is one task; both the fast path and the slow path

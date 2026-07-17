@@ -580,6 +580,14 @@ services:
       HONEYBOT_MODEL: "honeybot"
       # Live token map pushed by honeybot's voice-token skill lands here.
       VOICE_TOKEN_STORE_PATH: "/data/tokens.json"
+      # --- MCP OAuth (self-hosted AS, Google upstream) ---
+      # Public issuer (must match the subdomain nginx serves + the Google
+      # redirect URI's host). Client id/secret arrive via .env.runtime
+      # (GoogleOAuth-VoiceRelay); empty there = OAuth dormant, MCP uses the
+      # static voice-token bearer. See docs/voice-relay-oauth.md.
+      VOICE_PUBLIC_URL: "https://voice.honeybot.honeymanenterprises.com"
+      VOICE_OAUTH_ALLOWED_DOMAINS: "honeymanenterprises.com"
+      VOICE_OAUTH_STORE_PATH: "/data/oauth.json"
 
     volumes:
       # Persists the live token map across relay restarts (the cold-start

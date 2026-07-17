@@ -27,6 +27,11 @@ class VoiceRequest:
     request_id: str
     """Idempotency key. Client-supplied when available, else relay-generated."""
 
+    slack_uid: str = ""
+    """Pre-resolved Slack UID. Set by the OAuth path (identity comes from the
+    validated access token); when empty the core resolves `token` via the
+    TokenStore (the static-bearer path)."""
+
 
 @dataclass(frozen=True)
 class VoiceReply:

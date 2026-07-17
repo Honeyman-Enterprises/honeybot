@@ -16,7 +16,11 @@ exercised from unit tests. The tool logic itself (token → core.handle) is
 covered; the transport wiring is best-effort until smoke-tested end to end.
 """
 
-from __future__ import annotations
+# NB: deliberately NO `from __future__ import annotations` here. FastMCP's
+# @tool() introspects the tool function's parameter annotations with
+# issubclass() to find the Context arg; PEP 563 string annotations make that
+# raise `TypeError: issubclass() arg 1 must be a class` and crash mount().
+# Keep annotations as real objects in this module.
 
 import logging
 import uuid
@@ -42,38 +46,48 @@ class McpIngress:
             )
             return
 
-        mcp = FastMCP("honeybot")
+        # Everything below is wrapped: a failure here (tool registration,
+        # transport wiring, SDK API drift) must DISABLE MCP, never crash the
+        # whole relay. The HTTP/Siri path and the core stay up regardless.
+        try:
+            mcp = FastMCP("honeybot")
 
-        @mcp.tool()
-        async def ask_honeybot(command: str, ctx: Context) -> str:
-            """Send a command to honeybot and return its response.
+            @mcp.tool()
+            async def ask_honeybot(command: str, ctx: Context) -> str:
+                """Send a command to honeybot and return its response.
 
-            If honeybot can answer quickly it replies inline; otherwise it
-            acknowledges and follows up with the result in the requester's
-            Slack DM.
-            """
-            token = _bearer_from_ctx(ctx)
-            req = VoiceRequest(
-                text=(command or "").strip(),
-                token=token,
-                client=self.name,
-                request_id=f"mcp-{uuid.uuid4().hex[:12]}",
-            )
-            try:
-                reply = await core.handle(req)
-            except UnknownToken:
-                return (
-                    "This connector isn't authorized. Generate a voice token "
-                    "in honeybot (DM it 'generate my voice token') and put it "
-                    "in this connector's auth settings."
+                If honeybot can answer quickly it replies inline; otherwise
+                it acknowledges and follows up with the result in the
+                requester's Slack DM.
+                """
+                token = _bearer_from_ctx(ctx)
+                req = VoiceRequest(
+                    text=(command or "").strip(),
+                    token=token,
+                    client=self.name,
+                    request_id=f"mcp-{uuid.uuid4().hex[:12]}",
                 )
-            return reply.speech
+                try:
+                    reply = await core.handle(req)
+                except UnknownToken:
+                    return (
+                        "This connector isn't authorized. Generate a voice "
+                        "token in honeybot (DM it 'generate my voice token') "
+                        "and put it in this connector's auth settings."
+                    )
+                return reply.speech
 
-        # Mount the Streamable-HTTP app under /mcp. nginx forwards the whole
-        # voice.* vhost to the relay, so the public URL is
-        # https://voice.honeybot.honeymanenterprises.com/mcp
-        app.mount("/mcp", mcp.streamable_http_app())
-        log.info("MCP ingress mounted at /mcp")
+            # Mount the Streamable-HTTP app under /mcp. nginx forwards the
+            # whole voice.* vhost to the relay, so the public URL is
+            # https://voice.honeybot.honeymanenterprises.com/mcp
+            app.mount("/mcp", mcp.streamable_http_app())
+            log.info("MCP ingress mounted at /mcp")
+        except Exception:
+            log.exception(
+                "MCP ingress failed to mount; disabling it. The relay stays "
+                "up on the HTTP/Siri path — Claude/ChatGPT voice won't work "
+                "until this is fixed."
+            )
 
 
 def _bearer_from_ctx(ctx) -> str:

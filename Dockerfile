@@ -212,7 +212,7 @@ WORKDIR /home/honeybot
 # at `mkdir -p state/sessions` with EACCES, crash-looping the container.
 # Pre-creating the subtree makes the fresh volume inherit honeybot:honeybot.
 RUN mkdir -p .hermes/config .hermes/skills .hermes/data \
-             .hermes/state/sessions .hermes/state/cron workspace
+             .hermes/state/sessions .hermes/state/cron .hermes/auth workspace
 
 # ---- Model provider: Anthropic --------------------------------------------
 # Pin Hermes to Anthropic + Claude Sonnet 4.5. Upstream's default for

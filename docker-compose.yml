@@ -144,6 +144,12 @@ services:
       # can drop a file and it's immediately accessible at
       # https://honeybot.honeymanenterprises.com/files/<name>.
       - hermes-files:/home/honeybot/.hermes/files
+      # OTP / trusted-session store (verified_sessions.json). Shared with
+      # owui-auth-bridge so a Google login it verifies mints a session
+      # honeybot's OTP gate can see. Also makes verification survive
+      # rebuilds (previously ephemeral). Pre-created in the image so this
+      # fresh volume inherits honeybot (10001) ownership.
+      - honeybot-auth:/home/honeybot/.hermes/auth
 
     # No `ports:` — Slack Socket Mode is outbound-only. Nothing listens.
 
@@ -406,10 +412,11 @@ services:
 
     environment:
       # ---- Hermes wiring -----------------------------------------------
-      # Speak OpenAI to the api_server adapter on the honeybot container.
-      # `host.docker.internal` doesn't work on Linux without a workaround;
-      # use the service name on honeynet instead.
-      OPENAI_API_BASE_URL: http://honeybot:8642/v1
+      # Route through the owui-auth-bridge (NOT honeybot:8642 directly): it
+      # round-trip-verifies the signed-in Google user and injects the
+      # honeybot session key so their session skips the OTP gate. The bridge
+      # forwards to honeybot:8642. See docs/openwebui-google-identity.md.
+      OPENAI_API_BASE_URL: http://owui-auth-bridge:8080/v1
 
       # OPENAI_API_KEY — the bearer token Open WebUI presents to the
       # Hermes api_server — comes from .env.runtime (written by
@@ -594,6 +601,66 @@ services:
     networks: [honeynet]
 
   # ---------------------------------------------------------------------
+  # owui-auth-bridge — Open WebUI → honeybot identity bridge.
+  # ---------------------------------------------------------------------
+  # Sits in front of honeybot's api_server for Open WebUI traffic ONLY.
+  # Round-trip-verifies the signed-in Google user (Slack users.lookupByEmail,
+  # + optional Open WebUI cross-check), mints a trusted OTP session in the
+  # shared honeybot-auth volume, and injects X-Hermes-Session-Key so the
+  # session skips the OTP gate. Fails closed: unverified → forwarded without
+  # a session key (still works, just prompts OTP). Honeynet-only, no host
+  # port. See docs/openwebui-google-identity.md.
+  #
+  # Runs as UID 10001 (== honeybot) so honeybot-auth is writable by both.
+  owui-auth-bridge:
+    build:
+      context: .
+      dockerfile: owui-auth-bridge/Dockerfile
+    image: honeybot/owui-auth-bridge:local
+    container_name: honeybot-owui-auth-bridge
+    restart: unless-stopped
+
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+      honeybot:
+        condition: service_started
+
+    env_file:
+      # API_SERVER_KEY (required bearer, = HermesAPI key) + SLACK_BOT_TOKEN.
+      - path: ./.env.runtime
+        required: false
+
+    environment:
+      BRIDGE_PORT: "8080"
+      UPSTREAM_URL: "http://honeybot:8642"
+      OAUTH_ALLOWED_DOMAINS: "honeymanenterprises.com"
+      # otp_auth (reused inside the bridge) writes verified sessions here —
+      # the shared volume honeybot reads from.
+      HONEYBOT_AUTH_DIR: "/auth"
+      # Optional authoritative Open WebUI cross-check. Leave unset unless
+      # you've confirmed your OWUI version's GET /api/v1/users/{id} returns
+      # `email`; when unset the Slack round-trip is the control.
+      #   OWUI_API_URL: "http://openwebui:8080"
+      #   OWUI_API_KEY: "<owui admin api key>"   # via .env.runtime, not here
+      #   BRIDGE_REQUIRE_OWUI: "true"
+
+    volumes:
+      - honeybot-auth:/auth
+
+    cpus: 0.5
+    mem_limit: 256m
+    memswap_limit: 256m
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    networks: [honeynet]
+
+  # ---------------------------------------------------------------------
   # elasticsearch — internal only. Backing store for image-ingest MCP.
   # ---------------------------------------------------------------------
   # Security is ENABLED (8.x default). Passwords resolved from 1Password
@@ -757,6 +824,10 @@ volumes:
   # Small; survives relay restarts so freshly minted tokens aren't lost
   # between full compose-ups. 1Password remains the durable source of truth.
   voice-relay-data:
+  # Shared OTP/trusted-session store between honeybot and owui-auth-bridge
+  # (verified_sessions.json). The bridge mints here; honeybot's OTP gate
+  # reads here. Also gives verified sessions durability across rebuilds.
+  honeybot-auth:
   openwebui-data:
   # Issued TLS certs + ACME account keys for lua-resty-acme. Survives
   # container restarts; losing it forces LE re-issuance on next

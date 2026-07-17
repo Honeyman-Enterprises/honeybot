@@ -1,8 +1,11 @@
 # Google login → skip OTP (identity synergy)
 
-**Status: partially built.** The reusable, testable primitives + the two
-Open WebUI toggles are in. The last-mile bridge is specified here but NOT
-built, on purpose — see "Why the last mile is deliberately unbuilt".
+**Status: built; needs end-to-end verification on the running stack.** The
+primitives, the Open WebUI toggles, the `owui-auth-bridge`, and the hook
+that closes the loop are all in. The security core (round-trip
+verification) is unit-tested (12/12). The cross-container seams (shared
+auth volume perms, header propagation, session-key → creds.sh) can't be
+unit-tested from the repo — verify them live per the checklist below.
 
 ## The idea
 
@@ -48,52 +51,61 @@ That gap is the whole remaining task.
     closed (returns "").
   - CLI: `otp_auth.py trust --email … --session-key … [--uid …]`.
 
-## The last mile (specified, not built)
+## The bridge (built — `owui-auth-bridge/`)
 
-A tiny **auth bridge** sits between Open WebUI and the api_server
-(Open WebUI points its OpenAI connection at the bridge instead of
-`honeybot:8642`). Per request it:
+Open WebUI points its OpenAI connection at the bridge
+(`OPENAI_API_BASE_URL: http://owui-auth-bridge:8080/v1`) instead of
+`honeybot:8642`. Per request the bridge:
 
-1. Reads `X-OpenWebUI-User-Email` (trustworthy: login is Google-only +
-   domain-restricted, so this is a Google-verified Workspace email).
-2. Resolves it to a Slack UID (`slack_uid_for_email`).
-3. Mints a trusted session for `openwebui:{slack_uid}`
-   (`establish_trusted_session`) — writing to honeybot's auth store.
-4. Injects `X-Hermes-Session-Key: openwebui:{slack_uid}` and forwards to
+1. **Gate** — require the api_server bearer (only Open WebUI has it; the
+   bridge is honeynet-only) and **strip any client-supplied
+   `X-Hermes-Session-Key`** so a caller can't assert its own identity.
+2. **Round-trip verify** (`bridge/verify.py`) — take ONLY the claimed
+   email, resolve the UID from **Slack** (`users.lookupByEmail`), confirm
+   the account is active/human and the email/domain match, and (optionally)
+   confirm the `(user_id, email)` pair against Open WebUI's DB. The minted
+   UID never comes from the header.
+3. **Mint** a trusted session for `openwebui:{slack_uid}`
+   (`establish_trusted_session`) into the shared `honeybot-auth` volume.
+4. **Inject** `X-Hermes-Session-Key: openwebui:{slack_uid}` and forward to
    `honeybot:8642`.
+5. **Fail closed** — on any verification/mint failure, forward with NO
+   session key. The session stays unverified and falls back to OTP.
 
-Plus a small **`creds.sh`** change: for non-Slack sessions, when no
-`user_id` came from `--user` / `$HONEYBOT_SLACK_USER` / the Slack sidecar,
-derive it from the verified session (`get_verified_uid`). Without this,
-even an OTP- or trust-verified Open WebUI session still can't read creds
-because `creds.sh` has no Slack UID to build the vault path. (This is an
-independent fix — it also makes the *existing* OTP flow usable without the
-agent hand-passing `--user`.)
+Closing the loop **without touching `creds.sh`**: the `honeybot-identity`
+hook now, for non-Slack sessions, resolves the Slack UID from the verified
+session (`otp_auth.check_session`) and writes the usual per-session sidecar
+— so `creds.sh` gets the UID via its existing path (no `--user`, no OTP
+prompt). This also makes the *existing* OTP flow usable end-to-end on Open
+WebUI, not just the Google path.
 
-Then: Google login → bridge mints the trusted session + sets the session
-key → `creds.sh` finds the verified session AND derives the UID → per-user
-creds resolve, no OTP prompt.
+## Live verification checklist (before relying on it)
 
-## Why the last mile is deliberately unbuilt
+These cross-container seams are NOT unit-testable; confirm on the stack:
 
-This feature **bypasses an identity-verification control** — the thing that
-stops one user's session from reading another user's credentials. Getting
-the bridge's trust boundary subtly wrong (e.g. trusting a spoofable header,
-or minting for the wrong UID) re-opens exactly the cross-user
-credential-read hole the OTP gate closes. That's 🔴 security-critical, and
-it spans containers (Open WebUI → bridge → api_server → agent → creds.sh)
-with integration seams that can't be unit-tested from the repo. So the
-bridge + the `creds.sh` change get built and **verified end-to-end on the
-running stack** as their own focused step — not shipped blind alongside
-everything else.
+- `docker compose config` parses.
+- Open WebUI actually sends `X-OpenWebUI-User-Email` to the bridge — check
+  the bridge log for `verified <email> -> <uid>` on a Google-authed chat.
+- The `honeybot-auth` volume is writable by both containers (both run as
+  UID 10001; the volume seeds from honeybot's pre-created `.hermes/auth`).
+  Confirm `verified_sessions.json` appears and both can read it.
+- After a Google-authed message, a credentialed skill (e.g. gmail) works
+  WITHOUT an OTP prompt; the bridge log shows the verify, and the sidecar
+  exists for `openwebui:{uid}`.
+- A spoofed/mismatched identity is rejected (bridge logs `identity NOT
+  verified`) and that session still gets an OTP prompt — not silent access.
 
-Concretely, before building the bridge, confirm on the running stack:
-- Open WebUI actually sends `X-OpenWebUI-User-Email` to its OpenAI
-  connection target (capture it at the bridge).
-- The api_server honors `X-Hermes-Session-Key` from the bridge and the
-  agent's `HERMES_SESSION_KEY` / `creds.sh` see `openwebui:{slack_uid}`.
-- The auth store is shared correctly between the bridge and honeybot (a
-  shared volume, or the bridge calls a honeybot mint endpoint).
+## Security posture
+
+- **Bypasses an identity-verification control**, so the trust boundary is
+  load-bearing. The bridge resolves identity from authoritative sources
+  (Slack, optionally Open WebUI), never the raw header, and fails closed.
+- The bridge is **honeynet-only** (no host port, not via nginx) and
+  requires the api_server bearer — a public/unauthenticated bridge that
+  trusted an email header would be a trivial identity spoof.
+- `establish_trusted_session` is a trusted-issuer bypass; it's only ever
+  called from the bridge after round-trip verification, never from
+  user-typed input.
 
 ## Trust model
 

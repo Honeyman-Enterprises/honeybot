@@ -464,6 +464,29 @@ services:
       # signup gets admin regardless of this setting.
       DEFAULT_USER_ROLE: "user"
 
+      # ---- Voice / Call mode (STT + TTS via OpenAI) --------------------
+      # Open WebUI's built-in mic + hands-free Call mode. The audio layer
+      # goes DIRECT to OpenAI — NOT through honeybot's api_server. That's
+      # why the base URLs are set explicitly: Open WebUI otherwise defaults
+      # AUDIO_STT/TTS_OPENAI_API_BASE_URL to OPENAI_API_BASE_URL, which we
+      # point at the auth-bridge → honeybot (a chat-only adapter that can't
+      # transcribe or synthesize). The real OpenAI key
+      # (op://Honeybot/OpenAI/key) arrives as AUDIO_STT_OPENAI_API_KEY /
+      # AUDIO_TTS_OPENAI_API_KEY via .env.runtime — do NOT set those here.
+      # The chat model stays selectable via the model dropdown (sonnet/gpt
+      # through the model-prefix-router); the voice below is the default and
+      # each user can change it in Settings → Audio.
+      # NB: these are Open WebUI PersistentConfig — env SEEDS a fresh
+      # openwebui-data volume; on an existing one, confirm/set them in
+      # Admin → Settings → Audio. See docs/openwebui-voice.md.
+      AUDIO_STT_ENGINE: "openai"
+      AUDIO_STT_MODEL: "whisper-1"
+      AUDIO_STT_OPENAI_API_BASE_URL: "https://api.openai.com/v1"
+      AUDIO_TTS_ENGINE: "openai"
+      AUDIO_TTS_MODEL: "tts-1"
+      AUDIO_TTS_VOICE: "alloy"
+      AUDIO_TTS_OPENAI_API_BASE_URL: "https://api.openai.com/v1"
+
       # ---- App URL / behind-proxy hints --------------------------------
       # Open WebUI uses WEBUI_URL for password-reset links, OAuth
       # callbacks, and websocket origin checks. Must match the public

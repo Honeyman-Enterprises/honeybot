@@ -125,6 +125,13 @@ SMTP_MAIL_FROM="$(read_or_warn 'op://Honeybot/SMTP/mail_from')"
 # downstream in docker-compose.yml.
 SMTP_MAIL_FROM_NAME="$(read_or_silent 'op://Honeybot/SMTP/mail_from_name')"
 
+# Open WebUI voice (STT + TTS). The audio layer talks DIRECTLY to OpenAI
+# (base URLs set in compose), so it needs the REAL OpenAI key — the same
+# one honeybot uses for vision — NOT the api_server bearer that
+# OPENAI_API_KEY carries for Open WebUI's chat calls. read_or_silent:
+# empty ⇒ voice disabled, Open WebUI still boots. See docs/openwebui-voice.md.
+AUDIO_OPENAI_API_KEY="$(read_or_silent 'op://Honeybot/OpenAI/key')"
+
 # Voice relay — consumed by the voice-relay sidecar (not Varlock-aware),
 # so its secrets come through .env.runtime like ES/Neo4j/openwebui.
 #   SLACK_BOT_TOKEN : DM the requester on late completion (bot token,
@@ -196,6 +203,11 @@ umask 077
   # Exact var names Open WebUI reads; empty => Google login disabled.
   printf 'GOOGLE_CLIENT_ID=%s\n' "$GOOGLE_CLIENT_ID"
   printf 'GOOGLE_CLIENT_SECRET=%s\n' "$GOOGLE_CLIENT_SECRET"
+
+  # ---- Open WebUI voice (STT + TTS → OpenAI directly) ----
+  # Same real OpenAI key for both; empty => voice disabled.
+  printf 'AUDIO_STT_OPENAI_API_KEY=%s\n' "$AUDIO_OPENAI_API_KEY"
+  printf 'AUDIO_TTS_OPENAI_API_KEY=%s\n' "$AUDIO_OPENAI_API_KEY"
 
   # ---- voice-relay MCP OAuth (Google upstream) ----
   printf 'VOICE_OAUTH_GOOGLE_CLIENT_ID=%s\n' "$VOICE_OAUTH_GOOGLE_CLIENT_ID"

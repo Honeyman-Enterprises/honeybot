@@ -445,12 +445,13 @@ services:
       # aware the URL is public the moment DNS + nginx + cert resolve.
       ENABLE_SIGNUP: "true"
 
-      # Google-only sign-in: hide the username/password form entirely so
-      # the ONLY way in is "Continue with Google" (domain-restricted).
-      # ⚠️ Ensure a Google login as your admin works BEFORE relying on
-      # this — with the form hidden, a broken Google client locks everyone
-      # out. Recovery is to flip this back to "true" and re-up.
-      ENABLE_LOGIN_FORM: "false"
+      # Password login form. Keep "true" until a Google login has actually
+      # WORKED once — the "Continue with Google" button only renders when
+      # GOOGLE_CLIENT_ID/SECRET are populated (op://Honeybot/OpenWebUI Google
+      # OAuth/), so disabling the form before the Google client exists leaves
+      # an empty login page with no way in. Flip to "false" for Google-only
+      # ONLY after you've confirmed a Google admin sign-in.
+      ENABLE_LOGIN_FORM: "true"
 
       # Forward the authenticated user's identity (email, name, id, role)
       # to the upstream model API (honeybot's api_server) as X-OpenWebUI-

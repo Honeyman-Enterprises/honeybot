@@ -63,7 +63,16 @@ from __future__ import annotations
 import logging
 import os
 import re
+import sys
 from pathlib import Path
+
+# Make otp_auth (skills/_lib) importable so non-Slack sessions can resolve
+# their Slack UID from a verified/trusted session — e.g. one minted by the
+# owui-auth-bridge after a round-trip-verified Google login. Path:
+# ~/.hermes/hooks/honeybot-identity/handler.py -> ~/.hermes/skills/_lib.
+_SKILLS_LIB = Path(__file__).resolve().parents[2] / "skills" / "_lib"
+if _SKILLS_LIB.is_dir():
+    sys.path.insert(0, str(_SKILLS_LIB))
 
 # Prefer the gateway's contextvar-aware session accessor. At agent:start
 # emit time, the gateway has already populated the HERMES_SESSION_KEY
@@ -132,6 +141,27 @@ def _delete_session(session_key: str) -> None:
         pass
 
 
+def _verified_uid(session_key: str) -> str:
+    """Resolve a Slack UID from a verified/trusted session (non-Slack only).
+
+    Returns "" for Slack sessions (they have their own identity path), when
+    otp_auth isn't importable, or when there's no valid verified session.
+    The UID is only used if it passes the Slack-UID regex at the call site.
+    """
+    interface = session_key.split(":", 1)[0] if session_key else ""
+    if not interface or interface == "slack":
+        return ""
+    try:
+        from otp_auth import check_session  # skills/_lib, added to sys.path above
+    except ImportError:
+        return ""
+    try:
+        session = check_session(session_key, interface=interface)
+    except Exception:  # never let identity resolution abort the pipeline
+        return ""
+    return (session.slack_uid or "").strip() if session else ""
+
+
 async def handle(event_type: str, context: dict) -> None:
     """Gateway hook entrypoint.
 
@@ -157,25 +187,24 @@ async def handle(event_type: str, context: dict) -> None:
                 )
                 return
 
-            if not user_id:
-                logger.warning(
-                    "agent:start fired without user_id in context for "
-                    "session %s; skipping sidecar write",
-                    session_key,
-                )
-                return
-
             if not _SLACK_UID_RE.match(user_id):
-                # Non-Slack platforms (e.g. CLI, telegram) flow through the
-                # same hook because the hook listens on agent:start
-                # globally. Their user_id is not a Slack UID — that's
-                # expected and fine; we just skip.
-                logger.debug(
-                    "user_id %r is not a Slack UID; not a Slack-originated "
-                    "request, skipping",
-                    user_id,
-                )
-                return
+                # Slack sets a Slack UID in context. Non-Slack interfaces
+                # (Open WebUI, API) don't — but if a trusted session was
+                # minted for this session_key (the owui-auth-bridge does
+                # this after a round-trip-verified Google login), resolve
+                # the Slack UID from that verified session so creds.sh can
+                # use the normal sidecar path (no --user, no OTP prompt).
+                verified = _verified_uid(session_key)
+                if verified:
+                    user_id = verified
+                else:
+                    # Genuinely non-Slack + unverified: nothing to write.
+                    logger.debug(
+                        "user_id %r is not a Slack UID and no verified "
+                        "session for %s; skipping",
+                        user_id, session_key,
+                    )
+                    return
 
             _write_user_id(session_key, user_id)
             logger.debug(

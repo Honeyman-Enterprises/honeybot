@@ -144,6 +144,12 @@ services:
       # can drop a file and it's immediately accessible at
       # https://honeybot.honeymanenterprises.com/files/<name>.
       - hermes-files:/home/honeybot/.hermes/files
+      # OTP / trusted-session store (verified_sessions.json). Shared with
+      # owui-auth-bridge so a Google login it verifies mints a session
+      # honeybot's OTP gate can see. Also makes verification survive
+      # rebuilds (previously ephemeral). Pre-created in the image so this
+      # fresh volume inherits honeybot (10001) ownership.
+      - honeybot-auth:/home/honeybot/.hermes/auth
 
     # No `ports:` — Slack Socket Mode is outbound-only. Nothing listens.
 
@@ -406,10 +412,11 @@ services:
 
     environment:
       # ---- Hermes wiring -----------------------------------------------
-      # Speak OpenAI to the api_server adapter on the honeybot container.
-      # `host.docker.internal` doesn't work on Linux without a workaround;
-      # use the service name on honeynet instead.
-      OPENAI_API_BASE_URL: http://honeybot:8642/v1
+      # Route through the owui-auth-bridge (NOT honeybot:8642 directly): it
+      # round-trip-verifies the signed-in Google user and injects the
+      # honeybot session key so their session skips the OTP gate. The bridge
+      # forwards to honeybot:8642. See docs/openwebui-google-identity.md.
+      OPENAI_API_BASE_URL: http://owui-auth-bridge:8080/v1
 
       # OPENAI_API_KEY — the bearer token Open WebUI presents to the
       # Hermes api_server — comes from .env.runtime (written by
@@ -438,6 +445,21 @@ services:
       # aware the URL is public the moment DNS + nginx + cert resolve.
       ENABLE_SIGNUP: "true"
 
+      # Google-only sign-in: hide the username/password form entirely so
+      # the ONLY way in is "Continue with Google" (domain-restricted).
+      # ⚠️ Ensure a Google login as your admin works BEFORE relying on
+      # this — with the form hidden, a broken Google client locks everyone
+      # out. Recovery is to flip this back to "true" and re-up.
+      ENABLE_LOGIN_FORM: "false"
+
+      # Forward the authenticated user's identity (email, name, id, role)
+      # to the upstream model API (honeybot's api_server) as X-OpenWebUI-
+      # User-* headers. This is the prerequisite for the Google-login →
+      # skip-OTP synergy: it's how the Google-verified email reaches
+      # honeybot. Safe no-op on its own — nothing breaks if unconsumed.
+      # See docs/openwebui-google-identity.md.
+      ENABLE_FORWARD_USER_INFO_HEADERS: "true"
+
       # Default new accounts to "user" (not "admin"). Only the first
       # signup gets admin regardless of this setting.
       DEFAULT_USER_ROLE: "user"
@@ -451,6 +473,27 @@ services:
       # Trust the X-Forwarded-* headers nginx sets so server-rendered
       # links use https:// and the right host instead of http://openwebui:8080.
       WEBUI_AUTH_TRUSTED_EMAIL_HEADER: ""
+
+      # ---- Google OAuth ("Login with Google") --------------------------
+      # GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET come from .env.runtime
+      # (emitted by secrets-init from op://Honeybot/OpenWebUI Google OAuth/).
+      # Do NOT set them here — a Compose ${} override resolves against the
+      # host shell at parse time and would shadow the env_file value (same
+      # trap as the SMTP + API-key vars). The non-secret toggles are safe
+      # here. Empty client id/secret => the Google button simply doesn't
+      # appear; Open WebUI still boots. See docs/openwebui-google-oauth.md.
+      ENABLE_OAUTH_SIGNUP: "true"
+      # Merge a Google login into an existing account with the same email
+      # (e.g. the password account you bootstrapped as admin). Safe because
+      # OAUTH_ALLOWED_DOMAINS restricts to our verified Workspace domain —
+      # Google-asserted emails there are trustworthy.
+      OAUTH_MERGE_ACCOUNTS_BY_EMAIL: "true"
+      # Only @honeymanenterprises.com Google accounts may sign in. Belt-and-
+      # suspenders with an Internal OAuth consent screen on the Google side.
+      OAUTH_ALLOWED_DOMAINS: "honeymanenterprises.com"
+      # Explicit callback (Open WebUI otherwise derives it from WEBUI_URL).
+      # Must EXACTLY match the redirect URI registered on the Google client.
+      GOOGLE_REDIRECT_URI: "https://honeybot.honeymanenterprises.com/oauth/google/callback"
 
       # ---- SMTP (outbound mail) ----------------------------------------
       # All SMTP_* values come from .env.runtime (emitted by secrets-init
@@ -545,6 +588,66 @@ services:
 
     # Thin async proxy — a fraction of a core is plenty. Half a CPU and
     # 256m keep it out of Hermes' way.
+    cpus: 0.5
+    mem_limit: 256m
+    memswap_limit: 256m
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    networks: [honeynet]
+
+  # ---------------------------------------------------------------------
+  # owui-auth-bridge — Open WebUI → honeybot identity bridge.
+  # ---------------------------------------------------------------------
+  # Sits in front of honeybot's api_server for Open WebUI traffic ONLY.
+  # Round-trip-verifies the signed-in Google user (Slack users.lookupByEmail,
+  # + optional Open WebUI cross-check), mints a trusted OTP session in the
+  # shared honeybot-auth volume, and injects X-Hermes-Session-Key so the
+  # session skips the OTP gate. Fails closed: unverified → forwarded without
+  # a session key (still works, just prompts OTP). Honeynet-only, no host
+  # port. See docs/openwebui-google-identity.md.
+  #
+  # Runs as UID 10001 (== honeybot) so honeybot-auth is writable by both.
+  owui-auth-bridge:
+    build:
+      context: .
+      dockerfile: owui-auth-bridge/Dockerfile
+    image: honeybot/owui-auth-bridge:local
+    container_name: honeybot-owui-auth-bridge
+    restart: unless-stopped
+
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+      honeybot:
+        condition: service_started
+
+    env_file:
+      # API_SERVER_KEY (required bearer, = HermesAPI key) + SLACK_BOT_TOKEN.
+      - path: ./.env.runtime
+        required: false
+
+    environment:
+      BRIDGE_PORT: "8080"
+      UPSTREAM_URL: "http://honeybot:8642"
+      OAUTH_ALLOWED_DOMAINS: "honeymanenterprises.com"
+      # otp_auth (reused inside the bridge) writes verified sessions here —
+      # the shared volume honeybot reads from.
+      HONEYBOT_AUTH_DIR: "/auth"
+      # Optional authoritative Open WebUI cross-check. Leave unset unless
+      # you've confirmed your OWUI version's GET /api/v1/users/{id} returns
+      # `email`; when unset the Slack round-trip is the control.
+      #   OWUI_API_URL: "http://openwebui:8080"
+      #   OWUI_API_KEY: "<owui admin api key>"   # via .env.runtime, not here
+      #   BRIDGE_REQUIRE_OWUI: "true"
+
+    volumes:
+      - honeybot-auth:/auth
+
     cpus: 0.5
     mem_limit: 256m
     memswap_limit: 256m
@@ -721,6 +824,10 @@ volumes:
   # Small; survives relay restarts so freshly minted tokens aren't lost
   # between full compose-ups. 1Password remains the durable source of truth.
   voice-relay-data:
+  # Shared OTP/trusted-session store between honeybot and owui-auth-bridge
+  # (verified_sessions.json). The bridge mints here; honeybot's OTP gate
+  # reads here. Also gives verified sessions durability across rebuilds.
+  honeybot-auth:
   openwebui-data:
   # Issued TLS certs + ACME account keys for lua-resty-acme. Survives
   # container restarts; losing it forces LE re-issuance on next

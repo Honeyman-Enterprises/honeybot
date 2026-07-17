@@ -1,0 +1,2 @@
+# owui-auth-bridge runtime deps. Pin deliberately.
+aiohttp==3.10.10

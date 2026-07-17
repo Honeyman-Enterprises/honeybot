@@ -37,12 +37,26 @@ Scripts: `npm run build` (tsc → `dist/`), `npm test` (node:test via tsx),
 | `admin.ts` | `PUT/GET /admin/tokens` (constant-time key) |
 | `test/core.test.ts` | race/registry tests (fast/slow/error/unknown-token/oauth-uid) |
 
-**Next (needs the MCP SDK's OAuth API verified first — not guessed):**
+**Ported — MCP + OAuth (API verified against `@modelcontextprotocol/sdk@1.x`
+`.d.ts`, not guessed):**
 
-- `ingress/mcp.ts` — `McpServer` + `StreamableHTTPServerTransport`; OAuth mode
-  (`mcpAuthRouter` + an `OAuthServerProvider`, tool reads auth info) or
-  static-bearer mode.
-- `oauth/*` — the authorization-server provider (Google upstream), ported
-  from the tested Python `voice_relay/oauth/`.
-- `server.ts` + `index.ts` — Express app (routes + MCP mounted at root) + entry.
-- Compose: add `voice-relay-ts` as a parallel service, verify, then cut over.
+| Module | Role |
+|---|---|
+| `oauth/store.ts` | clients/tokens (persisted) + codes/pending (in-mem) |
+| `oauth/google.ts` | Google auth URL + code→verified-email |
+| `oauth/provider.ts` | `OAuthServerProvider` impl (Google upstream); `verifyAccessToken → AuthInfo{extra.slackUid}`; injectable Google exchange for tests |
+| `ingress/mcp.ts` | `McpServer` + `StreamableHTTPServerTransport`; unified `requireBearerAuth` (OAuth verifier or bearer verifier); `mcpAuthRouter` + `/oauth/callback` in OAuth mode |
+| `server.ts` / `index.ts` | Express app (routes + MCP/OAuth at root) + entry |
+| `test/oauth.test.ts` | provider suite (happy path, one-time code, refresh rotation, domain/uid/state/wrong-client rejects) |
+
+Key facts verified: SDK verifies PKCE (`challengeForAuthorizationCode`);
+identity via `AuthInfo.extra`; OAuth routes at root come free with Express
+`app.use(mcpAuthRouter(...))` (no mount hack).
+
+**Next:**
+- **First Docker build** — `tsc --strict` there confirms the exact SDK import
+  paths / signatures (the container is the typecheck gate; can't run node on host).
+- **Compose**: add `voice-relay-ts` as a *parallel* service (own image +
+  `voice-relay-ts-data` volume), smoke against Siri, then cut the nginx vhost
+  over from the Python relay.
+- Live OAuth handshake against a real mobile connector.

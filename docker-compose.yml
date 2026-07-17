@@ -391,7 +391,11 @@ services:
   # ~150MB; under load with a few users open it's well under 1GB. Cap
   # at 1GB to leave headroom on the t4g.small / Mac sharing memory.
   openwebui:
-    image: ghcr.io/open-webui/open-webui:main
+    # Pinned to a release (was the rolling `:main` tag) for reproducible
+    # deploys — `:main` drifts on every rebuild. Bump deliberately; check
+    # the release notes for breaking config changes first. If ghcr rejects
+    # the `v`-prefixed tag, the unprefixed `:0.10.2` also exists.
+    image: ghcr.io/open-webui/open-webui:v0.10.2
     container_name: honeybot-openwebui
     restart: unless-stopped
 

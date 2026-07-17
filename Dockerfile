@@ -251,9 +251,17 @@ RUN mkdir -p .hermes/config .hermes/skills .hermes/data \
 # diagnostic chain and the in-tree patch we'll eventually apply to
 # /opt/hermes/gateway/run.py to make `model.name` authoritative for the
 # gateway path too.
+# Provider matters too: Hermes' upstream default for `model.provider` has
+# flipped to `openrouter`, so leaving it unset makes the *first* chat
+# completion 401 against openrouter.ai with an empty model. Pin provider=
+# anthropic (ANTHROPIC_API_KEY is supplied at runtime by Varlock from
+# op://Honeybot/Anthropic API/api_key). To bump the model, change it HERE —
+# this is the one place. claude-sonnet-4-5 is the current choice (good vision
+# + tool-use, low cost vs opus); claude-opus-4-7 if complex multi-step
+# reasoning regresses.
 RUN hermes config set model.provider anthropic \
- && hermes config set model.name claude-opus-4-6 \
- && hermes config set model.default claude-opus-4-6
+ && hermes config set model.name claude-sonnet-4-5 \
+ && hermes config set model.default claude-sonnet-4-5
 
 # ---- Memory provider: Mem0 -------------------------------------------------
 # Select Mem0 as the long-term memory backend. The API key itself is injected

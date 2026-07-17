@@ -22,8 +22,8 @@ WebUI session skip the OTP step. Not built yet — noted for later.
   `OAUTH_MERGE_ACCOUNTS_BY_EMAIL`, `OAUTH_ALLOWED_DOMAINS=honeymanenterprises.com`,
   `GOOGLE_REDIRECT_URI`. Client id/secret are NOT set here (they'd be
   shadowed by Compose ${} at parse time) — they arrive via `.env.runtime`.
-- **scripts/seed-vault.sh**: creates `op://Honeybot/OpenWebUI Google OAuth/`
-  with empty `client_id` + `client_secret` on first boot.
+- **scripts/seed-vault.sh**: creates `op://Honeybot/GoogleOAuth-OpenWebUI/`
+  with empty `client_id` + `secret_id` on first boot.
 - **scripts/emit-runtime-env.sh**: emits `GOOGLE_CLIENT_ID` /
   `GOOGLE_CLIENT_SECRET` into `.env.runtime`. Empty = Google button hidden;
   Open WebUI still boots.
@@ -60,13 +60,13 @@ Google Cloud Console → **APIs & Services → Credentials → Create credential
 
 ## Step 3 — Store the credentials in 1Password
 
-In the **Honeybot** vault, open **OpenWebUI Google OAuth** (auto-created by
+In the **Honeybot** vault, open **GoogleOAuth-OpenWebUI** (auto-created by
 seed-vault) and set:
 
 | Field | Value |
 |---|---|
 | `client_id` | the Web client ID (`...apps.googleusercontent.com`) |
-| `client_secret` | the Web client secret |
+| `secret_id` | the Web client secret |
 
 ## Step 4 — Reload
 

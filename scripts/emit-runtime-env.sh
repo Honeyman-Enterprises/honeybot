@@ -92,10 +92,13 @@ API_SERVER_KEY="$(read_or_warn 'op://Honeybot/HermesAPI/key')"
 
 # Open WebUI "Login with Google" (OIDC). Optional — empty means the Google
 # button doesn't render and Open WebUI still boots, so read_or_silent (no
-# warning, no missing-count bump). The item is a Google Cloud *Web app*
-# OAuth client; see docs/openwebui-google-oauth.md.
-GOOGLE_CLIENT_ID="$(read_or_silent 'op://Honeybot/OpenWebUI Google OAuth/client_id')"
-GOOGLE_CLIENT_SECRET="$(read_or_silent 'op://Honeybot/OpenWebUI Google OAuth/client_secret')"
+# warning, no missing-count bump). Item is GoogleOAuth-OpenWebUI (distinct
+# from op://Honeybot/GoogleOAuth/ used by the Gmail CLI's Desktop client);
+# it MUST be a Google Cloud *Web application* client with the redirect URI
+# https://honeybot.honeymanenterprises.com/oauth/google/callback registered.
+# NB the secret field is named `secret_id`. See docs/openwebui-google-oauth.md.
+GOOGLE_CLIENT_ID="$(read_or_silent 'op://Honeybot/GoogleOAuth-OpenWebUI/client_id')"
+GOOGLE_CLIENT_SECRET="$(read_or_silent 'op://Honeybot/GoogleOAuth-OpenWebUI/secret_id')"
 
 # SMTP — consumed by the openwebui service for password-reset / email
 # verification flows (and any future surface that wants to send mail; see

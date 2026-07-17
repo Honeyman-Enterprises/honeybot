@@ -438,6 +438,21 @@ services:
       # aware the URL is public the moment DNS + nginx + cert resolve.
       ENABLE_SIGNUP: "true"
 
+      # Google-only sign-in: hide the username/password form entirely so
+      # the ONLY way in is "Continue with Google" (domain-restricted).
+      # ⚠️ Ensure a Google login as your admin works BEFORE relying on
+      # this — with the form hidden, a broken Google client locks everyone
+      # out. Recovery is to flip this back to "true" and re-up.
+      ENABLE_LOGIN_FORM: "false"
+
+      # Forward the authenticated user's identity (email, name, id, role)
+      # to the upstream model API (honeybot's api_server) as X-OpenWebUI-
+      # User-* headers. This is the prerequisite for the Google-login →
+      # skip-OTP synergy: it's how the Google-verified email reaches
+      # honeybot. Safe no-op on its own — nothing breaks if unconsumed.
+      # See docs/openwebui-google-identity.md.
+      ENABLE_FORWARD_USER_INFO_HEADERS: "true"
+
       # Default new accounts to "user" (not "admin"). Only the first
       # signup gets admin regardless of this setting.
       DEFAULT_USER_ROLE: "user"

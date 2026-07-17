@@ -692,6 +692,64 @@ services:
     networks: [honeynet]
 
   # ---------------------------------------------------------------------
+  # voice-relay-ts — TypeScript port of voice-relay (see voice-relay-ts/).
+  # ---------------------------------------------------------------------
+  # OPT-IN via `profiles: ["ts"]` — it does NOT start on a plain
+  # `docker compose up`, so its (not-yet-verified) build can't disrupt the
+  # running stack. Iterate the build + smoke it, then when it's proven,
+  # drop the profile and swap the nginx `voice.*` upstream from voice-relay
+  # to voice-relay-ts for a zero-downtime cutover.
+  #   docker compose --profile ts build voice-relay-ts   # tsc gate + tests
+  #   docker compose --profile ts up -d voice-relay-ts
+  # Same env contract as the Python relay (config.ts mirrors the var names);
+  # its own /data volume so the two don't share token/oauth state.
+  voice-relay-ts:
+    profiles: ["ts"]
+    build:
+      context: ./voice-relay-ts
+    image: honeybot/voice-relay-ts:local
+    container_name: honeybot-voice-relay-ts
+    restart: unless-stopped
+
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+      honeybot:
+        condition: service_started
+
+    env_file:
+      # HONEYBOT_API_KEY, SLACK_BOT_TOKEN, VOICE_TOKEN_MAP, VOICE_ADMIN_KEY,
+      # VOICE_OAUTH_GOOGLE_CLIENT_ID/_SECRET.
+      - path: ./.env.runtime
+        required: false
+
+    environment:
+      VOICE_RELAY_PORT: "8080"
+      VOICE_FAST_ACK_SECONDS: "3.5"
+      VOICE_AGENT_TIMEOUT_SECONDS: "300"
+      HONEYBOT_API_URL: "http://honeybot:8642/v1"
+      HONEYBOT_MODEL: "honeybot"
+      VOICE_TOKEN_STORE_PATH: "/data/tokens.json"
+      VOICE_PUBLIC_URL: "https://voice.honeybot.honeymanenterprises.com"
+      VOICE_OAUTH_ALLOWED_DOMAINS: "honeymanenterprises.com"
+      VOICE_OAUTH_STORE_PATH: "/data/oauth.json"
+
+    volumes:
+      - voice-relay-ts-data:/data
+
+    cpus: 0.5
+    mem_limit: 256m
+    memswap_limit: 256m
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    networks: [honeynet]
+
+  # ---------------------------------------------------------------------
   # elasticsearch — internal only. Backing store for image-ingest MCP.
   # ---------------------------------------------------------------------
   # Security is ENABLED (8.x default). Passwords resolved from 1Password
@@ -855,6 +913,9 @@ volumes:
   # Small; survives relay restarts so freshly minted tokens aren't lost
   # between full compose-ups. 1Password remains the durable source of truth.
   voice-relay-data:
+  # Separate store for the TypeScript relay so the parallel deploy doesn't
+  # share token/oauth state with the Python one during cutover.
+  voice-relay-ts-data:
   # Shared OTP/trusted-session store between honeybot and owui-auth-bridge
   # (verified_sessions.json). The bridge mints here; honeybot's OTP gate
   # reads here. Also gives verified sessions durability across rebuilds.

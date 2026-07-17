@@ -39,6 +39,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import secrets
 import sys
 import time
@@ -59,6 +60,8 @@ OTP_LENGTH = 6
 OTP_TTL_SECONDS = 5 * 60       # 5 minutes to enter the code
 SESSION_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days — sliding window, refreshed on each use
 MAX_ATTEMPTS = 5                # per OTP, after which it's burned
+
+_SLACK_UID_RE = re.compile(r"^[UW][A-Z0-9]{8,}$")
 
 # ---------------------------------------------------------------------------
 # Data models
@@ -312,6 +315,83 @@ def verify_otp(*, code: str, session_key: str, interface: str = "", email: str =
     return verified
 
 
+def slack_uid_for_email(email: str, *, bot_token: str = "") -> str:
+    """Resolve a Slack user ID from an email via users.lookupByEmail.
+
+    Uses SLACK_BOT_TOKEN (the bot needs the users:read.email scope). Returns
+    the UID, or "" if not found / on any error — callers must fail closed on
+    the empty case.
+    """
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    token = bot_token or os.environ.get("SLACK_BOT_TOKEN", "")
+    if not token or not email:
+        return ""
+    url = "https://slack.com/api/users.lookupByEmail?" + urllib.parse.urlencode({"email": email})
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.load(resp)
+    except (urllib.error.URLError, OSError, json.JSONDecodeError):
+        return ""
+    if data.get("ok") and isinstance(data.get("user"), dict):
+        return data["user"].get("id", "") or ""
+    return ""
+
+
+def establish_trusted_session(
+    *,
+    email: str,
+    slack_uid: str,
+    session_key: str,
+    interface: str = "openwebui",
+) -> VerifiedSession:
+    """Mint a verified session WITHOUT an OTP code.
+
+    For callers that have already proven the user's identity by a factor at
+    least as strong as email-OTP — e.g. a domain-restricted Google OAuth
+    login in Open WebUI, where Google itself asserts the verified email.
+    Same end state as a successful ``verify_otp``, minus the emailed code.
+
+    SECURITY — read before calling:
+      The OTP gate exists precisely because a chat message is NOT proof of
+      identity. This function is a trusted-issuer bypass of that gate, so it
+      MUST only be invoked from a path where (email, slack_uid) was
+      established out-of-band by a trusted authenticator (OAuth), NEVER from
+      anything the user typed or from an unauthenticated request. Wiring it
+      to the wrong input re-opens the exact cross-user credential-read hole
+      the gate closes. See docs/openwebui-google-identity.md.
+    """
+    if not email or "@" not in email:
+        raise ValueError(f"Invalid email: {email!r}")
+    if not _SLACK_UID_RE.match(slack_uid or ""):
+        raise ValueError(f"slack_uid {slack_uid!r} is not a Slack user ID")
+    if not session_key:
+        raise ValueError("session_key is required")
+
+    now = time.time()
+    verified = VerifiedSession(
+        email=email,
+        slack_uid=slack_uid,
+        session_key=session_key,
+        interface=interface,
+        verified_at=now,
+        expires_at=now + SESSION_TTL_SECONDS,
+        last_used_at=now,
+    )
+    # Key it the way the gate looks it up. creds.sh → verify_session.py
+    # calls check_session(session_key, interface) with NO email, so the
+    # lookup normalizes to the raw session_key (for non-Slack). Storing
+    # under the email-keyed variant here would make the gate never find it.
+    norm_key = _normalize_session_key(session_key, interface)
+    sessions = _load_verified()
+    sessions[norm_key] = asdict(verified)
+    _save_verified(sessions)
+    return verified
+
+
 def check_session(session_key: str, interface: str = "", email: str = "") -> Optional[VerifiedSession]:
     """Check if a session is verified. Returns VerifiedSession or None."""
     if not session_key:
@@ -464,6 +544,16 @@ def _build_parser() -> argparse.ArgumentParser:
     rev.add_argument("--interface", default="")
     rev.add_argument("--email", default="")
 
+    # trust — mint a verified session from an already-proven identity (no
+    # OTP). ONLY for trusted callers (e.g. the Google-OAuth bridge). See the
+    # security note on establish_trusted_session().
+    tru = sub.add_parser("trust", help="Mint a verified session from a proven identity (no OTP)")
+    tru.add_argument("--email", required=True)
+    tru.add_argument("--session-key", required=True)
+    tru.add_argument("--interface", default="openwebui")
+    tru.add_argument("--uid", default="",
+                     help="Slack UID; if omitted, resolved from --email via Slack")
+
     return p
 
 
@@ -532,6 +622,31 @@ def _main(argv: Optional[list[str]] = None) -> int:
                 email=args.email,
             )
             print("Revoked" if revoked else "No session to revoke")
+            return 0
+
+        elif args.command == "trust":
+            uid = args.uid or slack_uid_for_email(args.email)
+            if not uid:
+                print(json.dumps({
+                    "status": "failed",
+                    "error": f"could not resolve a Slack UID for {args.email} "
+                             "(pass --uid, or check the bot's users:read.email scope)",
+                }))
+                return 1
+            session = establish_trusted_session(
+                email=args.email,
+                slack_uid=uid,
+                session_key=args.session_key,
+                interface=args.interface,
+            )
+            print(json.dumps({
+                "status": "verified",
+                "email": session.email,
+                "slack_uid": session.slack_uid,
+                "expires_at": datetime.fromtimestamp(
+                    session.expires_at, tz=timezone.utc
+                ).isoformat(),
+            }, indent=2))
             return 0
 
     except VerificationError as e:

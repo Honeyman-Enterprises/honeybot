@@ -1,7 +1,6 @@
-tests/
-__pycache__/
-*.pyc
-.pytest_cache/
-.venv/
-venv/
+node_modules/
+dist/
+*.log
+.env
+.env.local
 README.md

@@ -1,79 +1,62 @@
-# voice-relay
+# voice-relay (TypeScript)
 
-Thin sidecar that lets voice assistants hand spoken commands to honeybot.
-Full design: [`docs/voice-relay.md`](../docs/voice-relay.md).
+The voice relay: Siri (HTTP) + Claude/ChatGPT (MCP) → honeybot. Behavior
+contract — see [`docs/voice-relay.md`](../docs/voice-relay.md)
+(fast-ack/async-DM), [`docs/voice-relay-oauth.md`](../docs/voice-relay-oauth.md)
+(MCP OAuth).
 
-**Phase 1 (this):** HTTP core + Siri ingress. Answers inline when the
-agent is fast; acks + DMs the requester in Slack when it's slow.
+**Why TypeScript** (replaced the original Python relay): Python-in-container
+fragility (PEP 563 crashing FastMCP, pydantic version sensitivity,
+`python:slim` missing `useradd`). Strict `tsc` + static types are the
+compile-time gate that catches those classes of bug.
 
-## Layout
+## Build / test
 
-```
-voice_relay/
-  types.py            VoiceRequest / VoiceReply (transport-agnostic)
-  config.py           env → Config
-  identity.py         per-user token → Slack UID (fail-closed)
-  registry.py         per-request state + atomic single-delivery claim
-  core.py             the fast-ack / async-DM race
-  honeybot_client.py  → honeybot api_server /v1/chat/completions
-  slack_client.py     → Slack DM (conversations.open + chat.postMessage)
-  app.py              FastAPI factory, mounts ingresses
-  ingress/
-    base.py           Ingress protocol + bearer() helper
-    siri.py           POST /v1/voice/ask   (also serves HTTP-only clients)
-    __init__.py       ENABLED_INGRESSES  ← add new adapters here
-```
-
-## Adding a voice adapter (the plugin point)
-
-1. New module in `voice_relay/ingress/` with a class exposing
-   `name: str` and `mount(app, core)`.
-2. In `mount`, parse the client's request into a `VoiceRequest`, call
-   `await core.handle(req)`, shape the `VoiceReply` back.
-3. Add an instance to `ENABLED_INGRESSES` in `ingress/__init__.py`.
-
-The core never changes. Phase 2 adds `mcp.py` (Claude/ChatGPT voice).
-
-## Config (env)
-
-| Var | Source | Default |
-|---|---|---|
-| `VOICE_RELAY_PORT` | compose | `8080` |
-| `VOICE_FAST_ACK_SECONDS` | compose | `3.5` |
-| `VOICE_AGENT_TIMEOUT_SECONDS` | compose | `300` |
-| `HONEYBOT_API_URL` | compose | `http://honeybot:8642/v1` |
-| `HONEYBOT_MODEL` | compose | `honeybot` |
-| `HONEYBOT_API_KEY` | `.env.runtime` (= HermesAPI key) | — |
-| `SLACK_BOT_TOKEN` | `.env.runtime` | — |
-| `VOICE_TOKEN_MAP` | `.env.runtime` (op://Honeybot/Voice/token_map) | `{}` → all 401 |
-
-`VOICE_TOKEN_MAP` is a compact JSON object of bearer-token → Slack UID:
-
-```json
-{"tok_eric_abc123":"U04ERIC","tok_michelle_def456":"U05MICHELLE"}
-```
-
-Empty map = fail-closed (every request 401s). That's the correct resting
-state for a public, action-triggering endpoint.
-
-## Test
-
-Core race-logic tests are stdlib-only (no FastAPI/httpx needed):
+Docker-first (no host node/npm). The build stage runs `tsc --strict` **and**
+the tests; either failing fails the image:
 
 ```bash
-python3 tests/test_core.py     # standalone runner, prints PASS/FAIL
-pytest tests/test_core.py       # if pytest is installed
+docker build -t voice-relay .
+# or, in the stack:  docker compose build voice-relay
 ```
 
-## Try it (once wired + a token is populated)
+Scripts: `npm run build` (tsc → `dist/`), `npm test` (node:test via tsx),
+`npm run typecheck`.
 
-```bash
-curl -sS https://voice.honeybot.honeymanenterprises.com/v1/voice/ask \
-  -H "Authorization: Bearer $VOICE_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"text":"what meetings do I have today","request_id":"dev-1"}'
-```
+## Modules
 
-Fast → `{"speech":"<answer>","status":"answered"}`.
-Slow → `{"speech":"On it — I'll message you in Slack…","status":"accepted"}`
-followed by a Slack DM when the agent finishes.
+**SDK-independent core:**
+
+| Module | Role |
+|---|---|
+| `types.ts` | VoiceRequest / VoiceReply |
+| `config.ts` | env → Config (+ `oauthEnabled`) |
+| `registry.ts` | per-request state + atomic single-delivery claim |
+| `core.ts` | the fast-ack / async-DM race (interfaces for testable deps) |
+| `tokenStore.ts` | dynamic bearer token map (persisted) |
+| `honeybotClient.ts` | → api_server `/v1/chat/completions` (native fetch) |
+| `slackClient.ts` | DM + `users.lookupByEmail` resolver |
+| `ingress/siri.ts` | `POST /v1/voice/ask` |
+| `admin.ts` | `PUT/GET /admin/tokens` (constant-time key) |
+| `test/core.test.ts` | race/registry tests (fast/slow/error/unknown-token/oauth-uid) |
+
+**MCP + OAuth (API verified against `@modelcontextprotocol/sdk@1.x`
+`.d.ts`, not guessed):**
+
+| Module | Role |
+|---|---|
+| `oauth/store.ts` | clients/tokens (persisted) + codes/pending (in-mem) |
+| `oauth/google.ts` | Google auth URL + code→verified-email |
+| `oauth/provider.ts` | `OAuthServerProvider` impl (Google upstream); `verifyAccessToken → AuthInfo{extra.slackUid}`; injectable Google exchange for tests |
+| `ingress/mcp.ts` | `McpServer` + `StreamableHTTPServerTransport`; unified `requireBearerAuth` (OAuth verifier or bearer verifier); `mcpAuthRouter` + `/oauth/callback` in OAuth mode |
+| `server.ts` / `index.ts` | Express app (routes + MCP/OAuth at root) + entry |
+| `test/oauth.test.ts` | provider suite (happy path, one-time code, refresh rotation, domain/uid/state/wrong-client rejects) |
+
+Key facts verified: SDK verifies PKCE (`challengeForAuthorizationCode`);
+identity via `AuthInfo.extra`; OAuth routes at root come free with Express
+`app.use(mcpAuthRouter(...))` (no mount hack).
+
+**Remaining validation:**
+- Live OAuth handshake against a real mobile connector (add
+  `https://voice.honeybot.honeymanenterprises.com/mcp` in Claude/ChatGPT →
+  Google sign-in → tool appears).

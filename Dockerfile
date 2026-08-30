@@ -12,6 +12,7 @@
 #   - gam      GAM7, Google Workspace admin CLI
 #   - slack    Official Slack CLI (Deno-based)
 #   - gh       GitHub CLI (used by the honeybot-dev skill for self-PRs)
+#   - plaid    Plaid CLI, read-only financial data (banks, investments)
 #
 # Identity model: every credential representing a human is stored in 1Password
 # at op://Honeybot/{Service}-{SlackUserID}/{field} and is only ever read using
@@ -84,6 +85,21 @@ deps = sorted({d for p in pathlib.Path('plugins').rglob('plugin.yaml') \
                for d in (yaml.safe_load(p.read_text()) or {}).get('pip_dependencies', []) or []}); \
 print('Plugin pip deps:', deps); \
 deps and subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--no-cache-dir', *deps])"
+
+# ---- Plaid CLI + Python SDK --------------------------------------------------
+# Read-only financial data aggregation (bank accounts, investments, transactions).
+# CLI: official Go binary from releases.plaid.com — link accounts, query balances,
+#   transactions, investments, liabilities.  Designed for developers and AI agents.
+# SDK: plaid-python for programmatic access from skills/scripts.
+# Credentials (PLAID_CLIENT_ID, PLAID_SECRET) injected at runtime from 1Password.
+ARG PLAID_CLI_VERSION=20260507-4d1b0ca0
+RUN ARCH=$([ "$(dpkg --print-architecture)" = "arm64" ] && echo "arm64" || echo "amd64") \
+ && curl -fsSL "https://releases.plaid.com/plaid-cli/releases/${PLAID_CLI_VERSION}/plaid-cli_${PLAID_CLI_VERSION}_linux_${ARCH}.tar.gz" \
+      | tar -xz -C /usr/local/bin plaid \
+ && chmod +x /usr/local/bin/plaid
+
+ARG PLAID_SDK_VERSION=39.2.0
+RUN pip install --no-cache-dir "plaid-python==${PLAID_SDK_VERSION}"
 
 # ---- HubSpot CLI -----------------------------------------------------------
 # Pre-installed globally as root so `honeybot` (non-root) can invoke `hs`
